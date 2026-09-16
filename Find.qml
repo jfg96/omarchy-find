@@ -166,11 +166,10 @@ Item {
 
   function cancelProcs() {
     debounce.stop()
-    searchRestart.stop()
     root.searchGen++
-    if (procDirs.running) procDirs.running = false
-    if (procFiles.running) procFiles.running = false
-    if (procStat.running) procStat.running = false
+    root.stopSearchProcess(procDirs)
+    root.stopSearchProcess(procFiles)
+    root.stopStatProcess()
     root.pendingProcs = 0
     root.rerunPending = false
     root.searching = false
@@ -310,6 +309,26 @@ Item {
 
   // Search
 
+  function stopSearchProcess(proc) {
+    if (!proc.busy) return
+    proc.cancelled = true
+    if (proc.running) proc.running = false
+  }
+
+  function stopStatProcess() {
+    if (!procStat.busy) return
+    procStat.cancelled = true
+    if (procStat.running) procStat.running = false
+  }
+
+  function maybeLaunchPendingSearch() {
+    // `running` becomes false before Process.onExited is delivered. `busy`
+    // remains true until that callback, so a Process object is never reused
+    // while an older exit event can still arrive and impersonate new work.
+    if (!root.rerunPending || procDirs.busy || procFiles.busy) return
+    root.launchSearch()
+  }
+
   function runSearch() {
     // Search only when expanded and not in Google search or AI mode.
     if (!root.expanded || root.isGoogleSearch || root.isAiMode) return
@@ -319,14 +338,10 @@ Item {
     root.pendingProcs = 0
     root.pendingItems = []
     root.searching = true
-    if (procDirs.running || procFiles.running) {
-      // A query or category change supersedes in-flight work. Stale exit
-      // callbacks are generation-guarded in procFinished().
-      if (procDirs.running) procDirs.running = false
-      if (procFiles.running) procFiles.running = false
-    }
-    if (procStat.running) procStat.running = false
-    searchRestart.restart()
+    root.stopSearchProcess(procDirs)
+    root.stopSearchProcess(procFiles)
+    root.stopStatProcess()
+    root.maybeLaunchPendingSearch()
   }
 
   function launchSearch() {
@@ -339,13 +354,17 @@ Item {
     if (filter.dirs) {
       pending++
       procDirs.gen = root.searchGen
+      procDirs.cancelled = false
       procDirs.command = Backend.buildArgv(root.filterText, root.activeFilter, true, root.home, root.pluginDir)
+      procDirs.busy = true
       procDirs.running = true
     }
     if (filter.files) {
       pending++
       procFiles.gen = root.searchGen
+      procFiles.cancelled = false
       procFiles.command = Backend.buildArgv(root.filterText, root.activeFilter, false, root.home, root.pluginDir)
+      procFiles.busy = true
       procFiles.running = true
     }
     root.pendingProcs = pending
@@ -355,11 +374,19 @@ Item {
     }
   }
 
+  function searchProcExited(proc, text) {
+    var wasCancelled = proc.cancelled
+    var generation = proc.gen
+    proc.busy = false
+    proc.cancelled = false
+
+    if (!wasCancelled && generation === root.searchGen && !root.isGoogleSearch) {
+      root.procFinished(proc, text)
+    }
+    root.maybeLaunchPendingSearch()
+  }
+
   function procFinished(proc, text) {
-    if (root.isGoogleSearch) return
-    // A stopped process may emit onExited after its successor was requested.
-    // It must not decrement the successor's shared pending count.
-    if (proc.gen !== root.searchGen) return
     root.pendingItems = root.pendingItems.concat(
       Backend.parseLines(text, proc.kind === "d", root.home))
     root.pendingProcs--
@@ -404,7 +431,7 @@ Item {
 
   // Batch stat for mtimes across raw candidate items.
   function fetchMtimes() {
-    if (root.rawItems.length === 0 || procStat.running) return
+    if (root.rawItems.length === 0 || procStat.busy) return
     var argv = ["stat", "-c", "%Y\t%n", "--"]
     var hasPaths = false
     var limit = Math.min(root.rawItems.length, 300)
@@ -417,8 +444,25 @@ Item {
     }
     if (!hasPaths) return
     procStat.gen = root.searchGen
+    procStat.cancelled = false
     procStat.command = argv
+    procStat.busy = true
     procStat.running = true
+  }
+
+  function statProcExited(text) {
+    var wasCancelled = procStat.cancelled
+    var generation = procStat.gen
+    procStat.busy = false
+    procStat.cancelled = false
+
+    if (!wasCancelled && generation === root.searchGen) {
+      root.applyMtimes(Backend.parseStatLines(text))
+    } else if (root.opened && root.rawItems.length > 0) {
+      // A newer result set arrived while the previous stat batch was being
+      // cancelled. Start metadata collection only after the old exit event.
+      root.fetchMtimes()
+    }
   }
 
   function applyMtimes(map) {
@@ -794,58 +838,42 @@ Item {
     onTriggered: root.runSearch()
   }
 
-  Timer {
-    id: searchRestart
-    interval: 10
-    repeat: false
-    onTriggered: {
-      // QProcess termination is asynchronous. Wait until both reusable
-      // Process objects are idle, then launch only the newest generation.
-      if (procDirs.running || procFiles.running) {
-        searchRestart.restart()
-      } else if (root.rerunPending) {
-        root.launchSearch()
-      }
-    }
-  }
-
   Process {
     id: procDirs
     property int gen: 0
     property string kind: "d"
+    property bool busy: false
+    property bool cancelled: false
     stdout: StdioCollector {
       id: outDirs
       waitForEnd: true
     }
-    onExited: function(exitCode) { root.procFinished(procDirs, outDirs.text || "") }
+    onExited: function(exitCode) { root.searchProcExited(procDirs, outDirs.text || "") }
   }
 
   Process {
     id: procFiles
     property int gen: 0
     property string kind: "f"
+    property bool busy: false
+    property bool cancelled: false
     stdout: StdioCollector {
       id: outFiles
       waitForEnd: true
     }
-    onExited: function(exitCode) { root.procFinished(procFiles, outFiles.text || "") }
+    onExited: function(exitCode) { root.searchProcExited(procFiles, outFiles.text || "") }
   }
 
   Process {
     id: procStat
     property int gen: 0
+    property bool busy: false
+    property bool cancelled: false
     stdout: StdioCollector {
       id: outStat
       waitForEnd: true
     }
-    onExited: function(exitCode) {
-      if (procStat.gen !== root.searchGen) {
-        // Obsolete search result.
-        if (!root.mtimesLoaded) root.fetchMtimes()
-        return
-      }
-      root.applyMtimes(Backend.parseStatLines(outStat.text || ""))
-    }
+    onExited: function(exitCode) { root.statProcExited(outStat.text || "") }
   }
 
   // AI search mode — config, binary check, the two generation processes,
