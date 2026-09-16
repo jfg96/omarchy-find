@@ -35,6 +35,11 @@ def fuzzy_pattern(term: str) -> str:
     return ".*".join(re.escape(char) for char in term)
 
 
+def literal_glob_pattern(term: str) -> str:
+    """Escape plocate glob metacharacters while keeping substring search."""
+    return "".join("\\" + char if char in "\\*?[]" else char for char in term)
+
+
 def under(path: str, root: str) -> bool:
     try:
         return os.path.commonpath((path, root)) == root
@@ -128,7 +133,11 @@ class Collector:
         buffer = b""
         try:
             while True:
-                chunk = proc.stdout.read(65536)
+                # BufferedReader.read(size) may wait for the entire requested
+                # chunk while the producer is still alive. read1() performs at
+                # most one pipe read, so a complete early record can stop a
+                # noisy plocate/fd process as soon as the result cap is met.
+                chunk = proc.stdout.read1(4096)
                 if not chunk:
                     break
                 buffer += chunk
@@ -153,15 +162,19 @@ class Collector:
 
     def collect_plocate(self, terms: list[str], basename: bool, fuzzy: bool = False) -> None:
         binary = os.environ.get("OMARCHY_FIND_PLOCATE", "plocate")
-        # Always use escaped EREs so user input such as '[' or '*' remains a
-        # literal filename query instead of changing plocate's pattern syntax.
-        argv = [binary, "-0", "-i", "--regex"]
+        argv = [binary, "-0", "-i"]
+        # Regex mode forces a linear database scan, so reserve it for the final
+        # subsequence fallback. Normal queries retain plocate's indexed
+        # substring path while escaping user-controlled glob metacharacters.
+        if fuzzy:
+            argv.append("--regex")
         if basename:
             argv.append("--basename")
+        argv.append("--")
         if fuzzy:
             argv.extend(fuzzy_pattern(term) for term in terms)
         else:
-            argv.extend(re.escape(term) for term in terms)
+            argv.extend(literal_glob_pattern(term) for term in terms)
         self.collect_process(argv)
 
     def collect_fd_fresh(self, terms: list[str]) -> None:
