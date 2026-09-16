@@ -12,6 +12,7 @@ import argparse
 import fnmatch
 import os
 import re
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -50,6 +51,14 @@ class Collector:
         }
         self.results: list[str] = []
         self.seen: set[str] = set()
+        self.active_process: subprocess.Popen[bytes] | None = None
+        self.cancelled = False
+
+    def cancel(self) -> None:
+        """Stop candidate collection and its currently active child process."""
+        self.cancelled = True
+        if self.active_process is not None and self.active_process.poll() is None:
+            self.active_process.terminate()
 
     def is_excluded(self, path: str) -> bool:
         relative = os.path.relpath(path, self.home)
@@ -107,12 +116,13 @@ class Collector:
         return len(self.results) >= self.args.max_results
 
     def collect_process(self, argv: list[str], nul: bool = True) -> None:
-        if len(self.results) >= self.args.max_results:
+        if self.cancelled or len(self.results) >= self.args.max_results:
             return
         try:
             proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         except FileNotFoundError:
             return
+        self.active_process = proc
         assert proc.stdout is not None
         separator = b"\0" if nul else b"\n"
         buffer = b""
@@ -139,6 +149,7 @@ class Collector:
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait()
+            self.active_process = None
 
     def collect_plocate(self, terms: list[str], basename: bool, fuzzy: bool = False) -> None:
         binary = os.environ.get("OMARCHY_FIND_PLOCATE", "plocate")
@@ -188,6 +199,17 @@ def main() -> int:
         return 0
 
     collector = Collector(args)
+
+    # Quickshell cancels obsolete searches by terminating this helper. Relay
+    # that cancellation to plocate/fd so rapid query or category changes never
+    # leave an orphan collector holding the stdout pipe open.
+    def handle_signal(signum: int, _frame: object) -> None:
+        collector.cancel()
+        raise SystemExit(128 + signum)
+
+    signal.signal(signal.SIGTERM, handle_signal)
+    signal.signal(signal.SIGINT, handle_signal)
+
     # Prefer filename matches, then path matches. This avoids a matching parent
     # directory filling the candidate budget with every descendant.
     collector.collect_plocate(terms, basename=True)

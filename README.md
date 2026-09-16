@@ -18,13 +18,13 @@ https://github.com/user-attachments/assets/771820df-2a80-4e5d-9aee-1f0e7b9f1159
 
 **Omarchy Find** brings a modern, Spotlight/Raycast-inspired search overlay experience natively integrated into the Omarchy shell. Designed for speed, ergonomics, and seamless workflow, it enables you to summon a search overlay at any moment to find and access anything across your system with zero friction.
 
-Whether you are looking for deeply nested project files, academic papers, media collections, or config directories (such as `~/.config/hypr`, `omarchy`, `nvim`), Omarchy Find indexes and filters your filesystem in real time. Beyond file launching, it acts as a central productivity hub: opening items in default applications, revealing folders in your file manager, launching terminals in target directories, copying clean paths, and bridging desktop search with AI and web queries.
+Whether you are looking for deeply nested project files, academic papers, media collections, or config directories (such as `~/.config/hypr`, `omarchy`, `nvim`), Omarchy Find searches and filters your filesystem in real time. Beyond file launching, it acts as a central productivity hub: opening items in default applications, revealing folders in your file manager, launching terminals in target directories, copying clean paths, and bridging desktop search with AI and web queries.
 
 ---
 
 ## Features
 
-- **Blazing Fast Search:** Real-time indexing powered by `fd` with smart multi-term matching and automatic noise filtering (`.git`, `node_modules`, `.cache`, `.venv`, electron storages, trash, etc.).
+- **Blazing Fast Search:** Indexed lookup powered by `plocate` when available, with a bounded `fd` freshness fallback, smart multi-term matching, and automatic noise filtering (`.git`, `node_modules`, `.cache`, `.venv`, electron storages, trash, etc.).
 - **Full-Path Awareness:** Matches both filenames and parent folder structures (e.g. typing `config` or `hypr` accurately locates `~/.config/hypr`).
 - **Smart Type Categorization:** Dedicated filters for All files, Non-hidden Folders, System Folders (configs & dotfiles), Documents, Multimedia, and Code.
 - **Dynamic Sorting & Results Limits:** On-the-fly reordering (Relevance, Recent, Oldest, A-Z, Z-A) and customizable display limits.
@@ -116,6 +116,14 @@ Omarchy Find will immediately detect the change and resume using whichever agent
 ---
 
 ## Install
+
+File search requires Python 3 and `fd`. Installing `plocate` is optional but
+recommended for fast indexed lookup; when it is unavailable, Omarchy Find
+automatically falls back to `fd`.
+
+```sh
+omarchy pkg add python fd plocate
+```
 
 ```sh
 omarchy plugin add https://github.com/jesseburlamaque/omarchy-find.git --enable
@@ -215,6 +223,14 @@ rm -f ~/.local/bin/omarchy-find ~/.local/share/applications/omarchy-find.desktop
 ## Feedback & Contributions
 
 This project is a work in progress — suggestions, bug reports, and improvements are very welcome!
+
+### Running the tests
+
+```sh
+node tests/search_unit_test.js
+tests/search_helper_test.sh
+node tests/ai_unit_test.js
+```
 
 ---
 

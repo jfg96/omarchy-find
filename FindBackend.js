@@ -252,14 +252,13 @@ function extractTerms(query) {
 // the primary source and a bounded, non-symlink-following fd freshness pass.
 // Empty queries still use fd because locate-style indexes have no meaningful
 // "recent files" query, but critically never follow symlinks.
-function buildArgv(query, filterIndex, forDirs, home, pluginDir) {
+function buildArgv(query, filterIndex, forDirs, home, helperPath) {
   var filter = FILTERS[filterIndex] || FILTERS[0]
   var cleanQuery = String(query || "").trim()
 
   if (cleanQuery !== "") {
-    var helper = String(pluginDir || "") + "/bin/omarchy-find-search"
     var indexedArgv = [
-      helper,
+      String(helperPath || ""),
       "--home", home,
       "--query", cleanQuery,
       "--kind", forDirs ? "d" : "f",

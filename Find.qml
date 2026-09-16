@@ -24,7 +24,10 @@ Item {
   property int activeFilter: 0
   property bool searching: false
   property string home: Quickshell.env("HOME")
-  readonly property string pluginDir: root.home + "/.config/omarchy/plugins/" + root.pluginId()
+  // Resolve the helper relative to this QML file instead of assuming the
+  // default plugin directory or a particular XDG_CONFIG_HOME.
+  readonly property string searchHelperPath: decodeURIComponent(
+    String(Qt.resolvedUrl("bin/omarchy-find-search")).replace(/^file:\/\//, ""))
 
   readonly property bool isGoogleSearch: /^\s*go\s+/i.test(root.filterText)
   readonly property string googleSearchTerms: isGoogleSearch ? root.filterText.replace(/^\s*go\s+/i, "").trim() : ""
@@ -355,7 +358,7 @@ Item {
       pending++
       procDirs.gen = root.searchGen
       procDirs.cancelled = false
-      procDirs.command = Backend.buildArgv(root.filterText, root.activeFilter, true, root.home, root.pluginDir)
+      procDirs.command = Backend.buildArgv(root.filterText, root.activeFilter, true, root.home, root.searchHelperPath)
       procDirs.busy = true
       procDirs.running = true
     }
@@ -363,7 +366,7 @@ Item {
       pending++
       procFiles.gen = root.searchGen
       procFiles.cancelled = false
-      procFiles.command = Backend.buildArgv(root.filterText, root.activeFilter, false, root.home, root.pluginDir)
+      procFiles.command = Backend.buildArgv(root.filterText, root.activeFilter, false, root.home, root.searchHelperPath)
       procFiles.busy = true
       procFiles.running = true
     }

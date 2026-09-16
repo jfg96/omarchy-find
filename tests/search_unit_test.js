@@ -16,13 +16,13 @@ function assert(condition, message) {
   passed++
 }
 
-const pluginDir = "/home/test/.config/omarchy/plugins/jesseburlamaque.omarchy-find"
-const indexed = backend.buildArgv("project notes", 3, false, "/home/test", pluginDir)
-assert(indexed[0] === pluginDir + "/bin/omarchy-find-search", "non-empty queries use indexed helper")
+const helperPath = "/opt/custom plugins/renamed-find/bin/omarchy-find-search"
+const indexed = backend.buildArgv("project notes", 3, false, "/home/test", helperPath)
+assert(indexed[0] === helperPath, "non-empty queries use the resolved helper path verbatim")
 assert(indexed.includes("--extensions"), "document category passes extensions")
 assert(!indexed.includes("--follow"), "indexed search never follows symlinks")
 
-const browse = backend.buildArgv("", 0, true, "/home/test", pluginDir)
+const browse = backend.buildArgv("", 0, true, "/home/test", helperPath)
 assert(browse[0] === "fd", "empty browse uses fd")
 assert(!browse.includes("--follow"), "empty browse never follows symlinks")
 assert(browse.includes("--max-results") && browse.includes("2000"), "candidate budget is applied")
