@@ -1,8 +1,10 @@
 .pragma library
 
-// Backend: configures filters, builds fd command, and ranks results.
+// Backend: configures filters, builds indexed/fallback commands, and ranks results.
 
-var MAX_RESULTS = 500
+// Candidate collection happens before relevance ranking. Keep this comfortably
+// above the visible result limit so a noisy path cannot crowd out better hits.
+var MAX_RESULTS = 2000
 var DISPLAY_LIMIT = 60
 var EMPTY_QUERY_DAYS = 30
 
@@ -246,10 +248,38 @@ function extractTerms(query) {
   return terms
 }
 
-// Builds fd arguments. Empty query lists recent items.
-function buildArgv(query, filterIndex, forDirs, home) {
+// Build the indexed-search helper arguments. Non-empty queries use plocate as
+// the primary source and a bounded, non-symlink-following fd freshness pass.
+// Empty queries still use fd because locate-style indexes have no meaningful
+// "recent files" query, but critically never follow symlinks.
+function buildArgv(query, filterIndex, forDirs, home, pluginDir) {
   var filter = FILTERS[filterIndex] || FILTERS[0]
-  var argv = ["fd", "--color=never", "-i", "--no-ignore", "--follow", "--max-results", String(MAX_RESULTS)]
+  var cleanQuery = String(query || "").trim()
+
+  if (cleanQuery !== "") {
+    var helper = String(pluginDir || "") + "/bin/omarchy-find-search"
+    var indexedArgv = [
+      helper,
+      "--home", home,
+      "--query", cleanQuery,
+      "--kind", forDirs ? "d" : "f",
+      "--max-results", String(MAX_RESULTS)
+    ]
+
+    if (filter.hidden === true) indexedArgv.push("--hidden")
+    if (filter.systemFolders) indexedArgv.push("--system-folders")
+    if (!forDirs && filter.exts.length > 0)
+      indexedArgv.push("--extensions", filter.exts.join(","))
+    for (var x = 0; x < EXCLUDES.length; x++)
+      indexedArgv.push("--exclude", EXCLUDES[x])
+    if (filter.systemFolders) {
+      for (var sx = 0; sx < SYSTEM_EXCLUDES.length; sx++)
+        indexedArgv.push("--exclude", SYSTEM_EXCLUDES[sx])
+    }
+    return indexedArgv
+  }
+
+  var argv = ["fd", "--color=never", "-i", "--no-ignore", "--max-results", String(MAX_RESULTS)]
   argv.push("--type", forDirs ? "d" : "f")
 
   if (filter.hidden === true) {
@@ -267,7 +297,7 @@ function buildArgv(query, filterIndex, forDirs, home) {
     for (var e = 0; e < filter.exts.length; e++) argv.push("-e", filter.exts[e])
   }
 
-  var terms = extractTerms(query)
+  var terms = extractTerms(cleanQuery)
   if (terms.length > 1) {
     for (var t = 1; t < terms.length; t++) {
       argv.push("--and", terms[t])
@@ -420,6 +450,8 @@ function scoreItem(item, query) {
     if (s < 0) {
       if (path.indexOf("/" + term) !== -1 || path.indexOf("/." + term) !== -1 || path.indexOf(" " + term) !== -1 || path.indexOf("_" + term) !== -1 || path.indexOf("-" + term) !== -1) s = 4
       else if (path.indexOf(term) !== -1) s = 5
+      else if (isSubsequence(term, name)) s = 6
+      else if (isSubsequence(term, path)) s = 7
       else return -1
     }
     total += s

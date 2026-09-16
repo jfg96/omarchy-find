@@ -1,0 +1,206 @@
+#!/usr/bin/env python3
+"""Indexed candidate collector for Omarchy Find.
+
+plocate supplies fast indexed candidates. A short, bounded fd pass fills the
+freshness gap between updatedb runs without following symlinks. Filtering is
+performed before the result cap so system-wide matches cannot crowd out $HOME.
+"""
+
+from __future__ import annotations
+
+import argparse
+import fnmatch
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--home", required=True)
+    parser.add_argument("--query", required=True)
+    parser.add_argument("--kind", choices=("d", "f"), required=True)
+    parser.add_argument("--max-results", type=int, default=2000)
+    parser.add_argument("--extensions", default="")
+    parser.add_argument("--exclude", action="append", default=[])
+    parser.add_argument("--hidden", action="store_true")
+    parser.add_argument("--system-folders", action="store_true")
+    return parser.parse_args()
+
+
+def fuzzy_pattern(term: str) -> str:
+    return ".*".join(re.escape(char) for char in term)
+
+
+def under(path: str, root: str) -> bool:
+    try:
+        return os.path.commonpath((path, root)) == root
+    except ValueError:
+        return False
+
+
+class Collector:
+    def __init__(self, args: argparse.Namespace) -> None:
+        self.args = args
+        self.home = os.path.realpath(args.home)
+        self.extensions = {
+            ext.lower().lstrip(".") for ext in args.extensions.split(",") if ext
+        }
+        self.results: list[str] = []
+        self.seen: set[str] = set()
+
+    def is_excluded(self, path: str) -> bool:
+        relative = os.path.relpath(path, self.home)
+        parts = relative.split(os.sep)
+        for pattern in self.args.exclude:
+            normalized = pattern.strip("/")
+            if "/" in normalized:
+                if relative == normalized or relative.startswith(normalized + os.sep):
+                    return True
+            elif any(fnmatch.fnmatch(part, normalized) for part in parts):
+                return True
+        return False
+
+    def is_system_folder(self, path: str) -> bool:
+        roots = (
+            os.path.join(self.home, ".config"),
+            os.path.join(self.home, ".local", "share"),
+        )
+        for root in roots:
+            if under(path, root):
+                relative = os.path.relpath(path, root)
+                depth = 0 if relative == "." else len(relative.split(os.sep))
+                return depth <= 3
+        return False
+
+    def accepts(self, raw_path: str) -> bool:
+        path = os.path.normpath(raw_path)
+        if path in self.seen or not under(path, self.home):
+            return False
+        if self.is_excluded(path):
+            return False
+        relative = os.path.relpath(path, self.home)
+        if not self.args.hidden and any(part.startswith(".") for part in relative.split(os.sep)):
+            return False
+        if self.args.system_folders and not self.is_system_folder(path):
+            return False
+        if self.args.kind == "d":
+            if not os.path.isdir(path):
+                return False
+        else:
+            if not os.path.isfile(path):
+                return False
+            if self.extensions:
+                suffix = Path(path).suffix.lower().lstrip(".")
+                if suffix not in self.extensions:
+                    return False
+        return True
+
+    def add(self, path: str) -> bool:
+        path = os.path.normpath(path)
+        if not self.accepts(path):
+            return False
+        self.seen.add(path)
+        self.results.append(path)
+        return len(self.results) >= self.args.max_results
+
+    def collect_process(self, argv: list[str], nul: bool = True) -> None:
+        if len(self.results) >= self.args.max_results:
+            return
+        try:
+            proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        except FileNotFoundError:
+            return
+        assert proc.stdout is not None
+        separator = b"\0" if nul else b"\n"
+        buffer = b""
+        try:
+            while True:
+                chunk = proc.stdout.read(65536)
+                if not chunk:
+                    break
+                buffer += chunk
+                records = buffer.split(separator)
+                buffer = records.pop()
+                for record in records:
+                    path = os.fsdecode(record)
+                    if path and self.add(path):
+                        proc.terminate()
+                        return
+            if buffer:
+                self.add(os.fsdecode(buffer))
+        finally:
+            if proc.poll() is None:
+                proc.terminate()
+            try:
+                proc.wait(timeout=0.2)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+
+    def collect_plocate(self, terms: list[str], basename: bool, fuzzy: bool = False) -> None:
+        binary = os.environ.get("OMARCHY_FIND_PLOCATE", "plocate")
+        # Always use escaped EREs so user input such as '[' or '*' remains a
+        # literal filename query instead of changing plocate's pattern syntax.
+        argv = [binary, "-0", "-i", "--regex"]
+        if basename:
+            argv.append("--basename")
+        if fuzzy:
+            argv.extend(fuzzy_pattern(term) for term in terms)
+        else:
+            argv.extend(re.escape(term) for term in terms)
+        self.collect_process(argv)
+
+    def collect_fd_fresh(self, terms: list[str]) -> None:
+        if len(self.results) >= min(120, self.args.max_results):
+            return
+        binary = os.environ.get("OMARCHY_FIND_FD", "fd")
+        argv = [
+            binary, "-0", "--color=never", "-i", "--no-ignore",
+            "--max-results", str(min(self.args.max_results, 2000)),
+            "--type", self.args.kind,
+        ]
+        if self.args.hidden:
+            argv.append("--hidden")
+        for pattern in self.args.exclude:
+            argv.extend(("-E", pattern))
+        if self.args.system_folders:
+            argv.extend(("--max-depth", "3"))
+        if self.extensions and self.args.kind == "f":
+            for extension in sorted(self.extensions):
+                argv.extend(("-e", extension))
+        for term in terms[1:]:
+            argv.extend(("--and", re.escape(term)))
+        argv.extend(("--full-path", "--", re.escape(terms[0])))
+        if self.args.system_folders:
+            argv.extend((os.path.join(self.home, ".config"), os.path.join(self.home, ".local", "share")))
+        else:
+            argv.append(self.home)
+        self.collect_process(argv)
+
+
+def main() -> int:
+    args = parse_args()
+    terms = list(dict.fromkeys(args.query.split()))
+    if not terms or args.max_results <= 0:
+        return 0
+
+    collector = Collector(args)
+    # Prefer filename matches, then path matches. This avoids a matching parent
+    # directory filling the candidate budget with every descendant.
+    collector.collect_plocate(terms, basename=True)
+    collector.collect_plocate(terms, basename=False)
+    collector.collect_fd_fresh(terms)
+
+    # Fuzzy matching is a last resort, never the primary candidate source.
+    if len(collector.results) < min(60, args.max_results) and all(len(t) >= 3 for t in terms):
+        collector.collect_plocate(terms, basename=True, fuzzy=True)
+
+    sys.stdout.write("".join(path + "\n" for path in collector.results))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

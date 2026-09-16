@@ -24,6 +24,7 @@ Item {
   property int activeFilter: 0
   property bool searching: false
   property string home: Quickshell.env("HOME")
+  readonly property string pluginDir: root.home + "/.config/omarchy/plugins/" + root.pluginId()
 
   readonly property bool isGoogleSearch: /^\s*go\s+/i.test(root.filterText)
   readonly property string googleSearchTerms: isGoogleSearch ? root.filterText.replace(/^\s*go\s+/i, "").trim() : ""
@@ -165,6 +166,8 @@ Item {
 
   function cancelProcs() {
     debounce.stop()
+    searchRestart.stop()
+    root.searchGen++
     if (procDirs.running) procDirs.running = false
     if (procFiles.running) procFiles.running = false
     if (procStat.running) procStat.running = false
@@ -293,6 +296,10 @@ Item {
     if (index === root.activeFilter) return
     root.activeFilter = index
     root.selectedIndex = 0
+    // Never show results from the previous category under the newly selected
+    // chip while its replacement search is starting.
+    root.rawItems = []
+    displayModel.clear()
     root.runSearch()
   }
 
@@ -306,12 +313,20 @@ Item {
   function runSearch() {
     // Search only when expanded and not in Google search or AI mode.
     if (!root.expanded || root.isGoogleSearch || root.isAiMode) return
+    debounce.stop()
     root.searchGen++
+    root.rerunPending = true
+    root.pendingProcs = 0
+    root.pendingItems = []
+    root.searching = true
     if (procDirs.running || procFiles.running) {
-      root.rerunPending = true
-      return
+      // A query or category change supersedes in-flight work. Stale exit
+      // callbacks are generation-guarded in procFinished().
+      if (procDirs.running) procDirs.running = false
+      if (procFiles.running) procFiles.running = false
     }
-    root.launchSearch()
+    if (procStat.running) procStat.running = false
+    searchRestart.restart()
   }
 
   function launchSearch() {
@@ -324,13 +339,13 @@ Item {
     if (filter.dirs) {
       pending++
       procDirs.gen = root.searchGen
-      procDirs.command = Backend.buildArgv(root.filterText, root.activeFilter, true, root.home)
+      procDirs.command = Backend.buildArgv(root.filterText, root.activeFilter, true, root.home, root.pluginDir)
       procDirs.running = true
     }
     if (filter.files) {
       pending++
       procFiles.gen = root.searchGen
-      procFiles.command = Backend.buildArgv(root.filterText, root.activeFilter, false, root.home)
+      procFiles.command = Backend.buildArgv(root.filterText, root.activeFilter, false, root.home, root.pluginDir)
       procFiles.running = true
     }
     root.pendingProcs = pending
@@ -342,10 +357,11 @@ Item {
 
   function procFinished(proc, text) {
     if (root.isGoogleSearch) return
-    if (proc.gen === root.searchGen) {
-      root.pendingItems = root.pendingItems.concat(
-        Backend.parseLines(text, proc.kind === "d", root.home))
-    }
+    // A stopped process may emit onExited after its successor was requested.
+    // It must not decrement the successor's shared pending count.
+    if (proc.gen !== root.searchGen) return
+    root.pendingItems = root.pendingItems.concat(
+      Backend.parseLines(text, proc.kind === "d", root.home))
     root.pendingProcs--
     if (root.pendingProcs > 0) return
     root.searching = false
@@ -776,6 +792,21 @@ Item {
     id: debounce
     interval: 200
     onTriggered: root.runSearch()
+  }
+
+  Timer {
+    id: searchRestart
+    interval: 10
+    repeat: false
+    onTriggered: {
+      // QProcess termination is asynchronous. Wait until both reusable
+      // Process objects are idle, then launch only the newest generation.
+      if (procDirs.running || procFiles.running) {
+        searchRestart.restart()
+      } else if (root.rerunPending) {
+        root.launchSearch()
+      }
+    }
   }
 
   Process {
