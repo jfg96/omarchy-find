@@ -24,7 +24,7 @@ Whether you are looking for deeply nested project files, academic papers, media 
 
 ## Features
 
-- **Blazing Fast Search:** Indexed lookup powered by `plocate` when available, with a bounded `fd` freshness fallback, smart multi-term matching, and automatic noise filtering (`.git`, `node_modules`, `.cache`, `.venv`, electron storages, trash, etc.).
+- **Blazing Fast Search:** Concurrent `fd` passes (filename, full path, fuzzy) with accent-insensitive multi-term matching (`cancion` finds `Canción`) and automatic noise filtering (`.git`, `node_modules`, `.cache`, `.venv`, electron storages, trash, etc.).
 - **Full-Path Awareness:** Matches both filenames and parent folder structures (e.g. typing `config` or `hypr` accurately locates `~/.config/hypr`).
 - **Smart Type Categorization:** Dedicated filters for All files, Non-hidden Folders, System Folders (configs & dotfiles), Documents, Multimedia, and Code.
 - **Dynamic Sorting & Results Limits:** On-the-fly reordering (Relevance, Recent, Oldest, A-Z, Z-A) and customizable display limits.
@@ -117,12 +117,10 @@ Omarchy Find will immediately detect the change and resume using whichever agent
 
 ## Install
 
-File search requires Python 3 and `fd`. Installing `plocate` is optional but
-recommended for fast indexed lookup; when it is unavailable, Omarchy Find
-automatically falls back to `fd`.
+File search requires Python 3 and `fd`.
 
 ```sh
-omarchy pkg add python fd plocate
+omarchy pkg add python fd
 ```
 
 ```sh

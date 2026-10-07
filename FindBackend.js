@@ -1,6 +1,6 @@
 .pragma library
 
-// Backend: configures filters, builds indexed/fallback commands, and ranks results.
+// Backend: configures filters, builds search commands, and ranks results.
 
 // Candidate collection happens before relevance ranking. Keep this comfortably
 // above the visible result limit so a noisy path cannot crowd out better hits.
@@ -248,16 +248,16 @@ function extractTerms(query) {
   return terms
 }
 
-// Build the indexed-search helper arguments. Non-empty queries use plocate as
-// the primary source and a bounded, non-symlink-following fd freshness pass.
-// Empty queries still use fd because locate-style indexes have no meaningful
-// "recent files" query, but critically never follow symlinks.
+// Build the search command. Non-empty queries go through the helper, which
+// runs concurrent, accent-insensitive fd passes (filename, path, fuzzy) and
+// merges them in relevance order. Empty queries list files with fd directly.
+// Neither ever follows symlinks.
 function buildArgv(query, filterIndex, forDirs, home, helperPath) {
   var filter = FILTERS[filterIndex] || FILTERS[0]
   var cleanQuery = String(query || "").trim()
 
   if (cleanQuery !== "") {
-    var indexedArgv = [
+    var helperArgv = [
       String(helperPath || ""),
       "--home", home,
       "--query", cleanQuery,
@@ -265,17 +265,17 @@ function buildArgv(query, filterIndex, forDirs, home, helperPath) {
       "--max-results", String(MAX_RESULTS)
     ]
 
-    if (filter.hidden === true) indexedArgv.push("--hidden")
-    if (filter.systemFolders) indexedArgv.push("--system-folders")
+    if (filter.hidden === true) helperArgv.push("--hidden")
+    if (filter.systemFolders) helperArgv.push("--system-folders")
     if (!forDirs && filter.exts.length > 0)
-      indexedArgv.push("--extensions", filter.exts.join(","))
+      helperArgv.push("--extensions", filter.exts.join(","))
     for (var x = 0; x < EXCLUDES.length; x++)
-      indexedArgv.push("--exclude", EXCLUDES[x])
+      helperArgv.push("--exclude", EXCLUDES[x])
     if (filter.systemFolders) {
       for (var sx = 0; sx < SYSTEM_EXCLUDES.length; sx++)
-        indexedArgv.push("--exclude", SYSTEM_EXCLUDES[sx])
+        helperArgv.push("--exclude", SYSTEM_EXCLUDES[sx])
     }
-    return indexedArgv
+    return helperArgv
   }
 
   var argv = ["fd", "--color=never", "-i", "--no-ignore", "--max-results", String(MAX_RESULTS)]

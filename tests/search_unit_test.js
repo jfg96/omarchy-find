@@ -17,10 +17,10 @@ function assert(condition, message) {
 }
 
 const helperPath = "/opt/custom plugins/renamed-find/bin/omarchy-find-search"
-const indexed = backend.buildArgv("project notes", 3, false, "/home/test", helperPath)
-assert(indexed[0] === helperPath, "non-empty queries use the resolved helper path verbatim")
-assert(indexed.includes("--extensions"), "document category passes extensions")
-assert(!indexed.includes("--follow"), "indexed search never follows symlinks")
+const search = backend.buildArgv("project notes", 3, false, "/home/test", helperPath)
+assert(search[0] === helperPath, "non-empty queries use the resolved helper path verbatim")
+assert(search.includes("--extensions"), "document category passes extensions")
+assert(!search.includes("--follow"), "search never follows symlinks")
 
 const browse = backend.buildArgv("", 0, true, "/home/test", helperPath)
 assert(browse[0] === "fd", "empty browse uses fd")

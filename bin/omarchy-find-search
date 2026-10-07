@@ -1,21 +1,20 @@
 #!/usr/bin/env python3
-"""Indexed candidate collector for Omarchy Find.
+"""Candidate collector for Omarchy Find.
 
-plocate supplies fast indexed candidates. A short, bounded fd pass fills the
-freshness gap between updatedb runs without following symlinks. Filtering is
-performed before the result cap so system-wide matches cannot crowd out $HOME.
+Runs concurrent fd passes over $HOME (filename, full path and a fuzzy
+fallback) and merges them in relevance order. fd walks a typical home in tens
+of milliseconds, never returns stale paths, prunes excluded directories while
+walking and never follows symlinks. Matching is accent-insensitive.
 """
 
 from __future__ import annotations
 
 import argparse
-import fnmatch
 import os
-import re
 import signal
 import subprocess
 import sys
-from pathlib import Path
+import unicodedata
 
 
 def parse_args() -> argparse.Namespace:
@@ -31,159 +30,74 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+ACCENT_CLASSES = {
+    "a": "[aáàãâä]",
+    "e": "[eéèêë]",
+    "i": "[iíìîï]",
+    "o": "[oóòõôö]",
+    "u": "[uúùûü]",
+    "c": "[cç]",
+    "n": "[nñ]",
+}
+REGEX_SPECIALS = "\\^$.[]|()?*+{}"
+
+
+def regex_escape(text: str) -> str:
+    return "".join("\\" + char if char in REGEX_SPECIALS else char for char in text)
+
+
+def accent_char(char: str) -> str:
+    base = unicodedata.normalize("NFD", char.lower())[0]
+    return ACCENT_CLASSES.get(base) or regex_escape(char)
+
+
+def accent_pattern(term: str) -> str:
+    """Accent-insensitive literal: "cancion" also matches "Canción"."""
+    return "".join(accent_char(char) for char in term)
+
+
 def fuzzy_pattern(term: str) -> str:
-    return ".*".join(re.escape(char) for char in term)
-
-
-def literal_glob_pattern(term: str) -> str:
-    """Escape plocate glob metacharacters while keeping substring search."""
-    return "".join("\\" + char if char in "\\*?[]" else char for char in term)
-
-
-def under(path: str, root: str) -> bool:
-    try:
-        return os.path.commonpath((path, root)) == root
-    except ValueError:
-        return False
+    """Ordered subsequence: "omfind" matches "omarchy-find"."""
+    return ".*".join(accent_char(char) for char in term)
 
 
 class Collector:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
         self.home = os.path.realpath(args.home)
-        self.extensions = {
-            ext.lower().lstrip(".") for ext in args.extensions.split(",") if ext
-        }
+        self.extensions = sorted(
+            {ext.lower().lstrip(".") for ext in args.extensions.split(",") if ext}
+        )
         self.results: list[str] = []
         self.seen: set[str] = set()
-        self.active_process: subprocess.Popen[bytes] | None = None
+        self.processes: list[subprocess.Popen[bytes]] = []
         self.cancelled = False
 
     def cancel(self) -> None:
-        """Stop candidate collection and its currently active child process."""
+        """Stop candidate collection and every running child process."""
         self.cancelled = True
-        if self.active_process is not None and self.active_process.poll() is None:
-            self.active_process.terminate()
-
-    def is_excluded(self, path: str) -> bool:
-        relative = os.path.relpath(path, self.home)
-        parts = relative.split(os.sep)
-        for pattern in self.args.exclude:
-            normalized = pattern.strip("/")
-            if "/" in normalized:
-                if relative == normalized or relative.startswith(normalized + os.sep):
-                    return True
-            elif any(fnmatch.fnmatch(part, normalized) for part in parts):
-                return True
-        return False
-
-    def is_system_folder(self, path: str) -> bool:
-        roots = (
-            os.path.join(self.home, ".config"),
-            os.path.join(self.home, ".local", "share"),
-        )
-        for root in roots:
-            if under(path, root):
-                relative = os.path.relpath(path, root)
-                depth = 0 if relative == "." else len(relative.split(os.sep))
-                return depth <= 3
-        return False
-
-    def accepts(self, raw_path: str) -> bool:
-        path = os.path.normpath(raw_path)
-        if path in self.seen or not under(path, self.home):
-            return False
-        if self.is_excluded(path):
-            return False
-        relative = os.path.relpath(path, self.home)
-        if not self.args.hidden and any(part.startswith(".") for part in relative.split(os.sep)):
-            return False
-        if self.args.system_folders and not self.is_system_folder(path):
-            return False
-        if self.args.kind == "d":
-            if not os.path.isdir(path):
-                return False
-        else:
-            if not os.path.isfile(path):
-                return False
-            if self.extensions:
-                suffix = Path(path).suffix.lower().lstrip(".")
-                if suffix not in self.extensions:
-                    return False
-        return True
+        for proc in list(self.processes):
+            self.stop(proc)
 
     def add(self, path: str) -> bool:
         path = os.path.normpath(path)
-        if not self.accepts(path):
-            return False
-        self.seen.add(path)
-        self.results.append(path)
+        if path not in self.seen:
+            self.seen.add(path)
+            self.results.append(path)
         return len(self.results) >= self.args.max_results
 
-    def collect_process(self, argv: list[str], nul: bool = True) -> None:
-        if self.cancelled or len(self.results) >= self.args.max_results:
-            return
-        try:
-            proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        except FileNotFoundError:
-            return
-        self.active_process = proc
-        assert proc.stdout is not None
-        separator = b"\0" if nul else b"\n"
-        buffer = b""
-        try:
-            while True:
-                # BufferedReader.read(size) may wait for the entire requested
-                # chunk while the producer is still alive. read1() performs at
-                # most one pipe read, so a complete early record can stop a
-                # noisy plocate/fd process as soon as the result cap is met.
-                chunk = proc.stdout.read1(4096)
-                if not chunk:
-                    break
-                buffer += chunk
-                records = buffer.split(separator)
-                buffer = records.pop()
-                for record in records:
-                    path = os.fsdecode(record)
-                    if path and self.add(path):
-                        proc.terminate()
-                        return
-            if buffer:
-                self.add(os.fsdecode(buffer))
-        finally:
-            if proc.poll() is None:
-                proc.terminate()
-            try:
-                proc.wait(timeout=0.2)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
-            self.active_process = None
+    def spawn_fd(self, terms: list[str], mode: str) -> subprocess.Popen[bytes] | None:
+        """Start an fd pass now; its output waits in the pipe until consumed.
 
-    def collect_plocate(self, terms: list[str], basename: bool, fuzzy: bool = False) -> None:
-        binary = os.environ.get("OMARCHY_FIND_PLOCATE", "plocate")
-        argv = [binary, "-0", "-i"]
-        # Regex mode forces a linear database scan, so reserve it for the final
-        # subsequence fallback. Normal queries retain plocate's indexed
-        # substring path while escaping user-controlled glob metacharacters.
-        if fuzzy:
-            argv.append("--regex")
-        if basename:
-            argv.append("--basename")
-        argv.append("--")
-        if fuzzy:
-            argv.extend(fuzzy_pattern(term) for term in terms)
-        else:
-            argv.extend(literal_glob_pattern(term) for term in terms)
-        self.collect_process(argv)
-
-    def collect_fd_fresh(self, terms: list[str]) -> None:
-        if len(self.results) >= min(120, self.args.max_results):
-            return
+        Passes are spawned together so their walks overlap, while consuming
+        them in order keeps the candidate ranking deterministic.
+        """
+        if self.cancelled:
+            return None
         binary = os.environ.get("OMARCHY_FIND_FD", "fd")
         argv = [
             binary, "-0", "--color=never", "-i", "--no-ignore",
-            "--max-results", str(min(self.args.max_results, 2000)),
+            "--max-results", str(self.args.max_results),
             "--type", self.args.kind,
         ]
         if self.args.hidden:
@@ -192,17 +106,77 @@ class Collector:
             argv.extend(("-E", pattern))
         if self.args.system_folders:
             argv.extend(("--max-depth", "3"))
-        if self.extensions and self.args.kind == "f":
-            for extension in sorted(self.extensions):
+        if self.args.kind == "f":
+            for extension in self.extensions:
                 argv.extend(("-e", extension))
-        for term in terms[1:]:
-            argv.extend(("--and", re.escape(term)))
-        argv.extend(("--full-path", "--", re.escape(terms[0])))
+
+        if mode == "path":
+            # Anchor below $HOME so a term that occurs in the home path itself
+            # (e.g. the user name) does not match every file.
+            home = regex_escape(self.home)
+            patterns = [f"^{home}/.*" + accent_pattern(term) for term in terms]
+            argv.append("--full-path")
+        elif mode == "fuzzy":
+            patterns = [fuzzy_pattern(term) for term in terms]
+        else:
+            patterns = [accent_pattern(term) for term in terms]
+        for pattern in patterns[1:]:
+            argv.extend(("--and", pattern))
+        argv.extend(("--", patterns[0]))
+
         if self.args.system_folders:
             argv.extend((os.path.join(self.home, ".config"), os.path.join(self.home, ".local", "share")))
         else:
             argv.append(self.home)
-        self.collect_process(argv)
+        try:
+            proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        except FileNotFoundError:
+            return None
+        self.processes.append(proc)
+        return proc
+
+    def stop(self, proc: subprocess.Popen[bytes]) -> None:
+        if proc.poll() is None:
+            proc.terminate()
+        try:
+            proc.wait(timeout=0.2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        if proc in self.processes:
+            self.processes.remove(proc)
+
+    def consume(self, proc: subprocess.Popen[bytes] | None) -> None:
+        if proc is None:
+            return
+        try:
+            if self.cancelled or len(self.results) >= self.args.max_results:
+                return
+            assert proc.stdout is not None
+            buffer = b""
+            while True:
+                # BufferedReader.read(size) may wait for the entire requested
+                # chunk while the producer is still alive. read1() performs at
+                # most one pipe read, so a complete early record can stop a
+                # noisy fd process as soon as the result cap is met.
+                chunk = proc.stdout.read1(4096)
+                if not chunk:
+                    break
+                buffer += chunk
+                records = buffer.split(b"\0")
+                buffer = records.pop()
+                for record in records:
+                    if record and self.add(os.fsdecode(record)):
+                        return
+            if buffer:
+                self.add(os.fsdecode(buffer))
+        finally:
+            self.stop(proc)
+
+    def finish(self) -> None:
+        """Stop passes that were spawned but not needed after the cap."""
+        for proc in list(self.processes):
+            self.stop(proc)
 
 
 def main() -> int:
@@ -214,8 +188,8 @@ def main() -> int:
     collector = Collector(args)
 
     # Quickshell cancels obsolete searches by terminating this helper. Relay
-    # that cancellation to plocate/fd so rapid query or category changes never
-    # leave an orphan collector holding the stdout pipe open.
+    # that cancellation to fd so rapid query or category changes never leave
+    # an orphan collector holding the stdout pipe open.
     def handle_signal(signum: int, _frame: object) -> None:
         collector.cancel()
         raise SystemExit(128 + signum)
@@ -223,16 +197,24 @@ def main() -> int:
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)
 
-    # Prefer filename matches, then path matches. This avoids a matching parent
-    # directory filling the candidate budget with every descendant.
-    collector.collect_plocate(terms, basename=True)
-    collector.collect_plocate(terms, basename=False)
-    collector.collect_fd_fresh(terms)
+    # Filename matches first, then path matches. This avoids a matching parent
+    # directory filling the candidate budget with every descendant. A term
+    # containing "/" can only match a full path, so it skips the filename pass.
+    basename = None
+    if not any("/" in term for term in terms):
+        basename = collector.spawn_fd(terms, "basename")
+    full_path = collector.spawn_fd(terms, "path")
+    collector.consume(basename)
+    collector.consume(full_path)
 
     # Fuzzy matching is a last resort, never the primary candidate source.
-    if len(collector.results) < min(60, args.max_results) and all(len(t) >= 3 for t in terms):
-        collector.collect_plocate(terms, basename=True, fuzzy=True)
+    if (
+        len(collector.results) < min(60, args.max_results)
+        and all(len(term) >= 3 and "/" not in term for term in terms)
+    ):
+        collector.consume(collector.spawn_fd(terms, "fuzzy"))
 
+    collector.finish()
     sys.stdout.write("".join(path + "\n" for path in collector.results))
     return 0
 
