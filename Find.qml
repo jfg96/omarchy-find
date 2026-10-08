@@ -3,6 +3,7 @@ import Quickshell.Io
 import Quickshell.Wayland
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "FindBackend.js" as Backend
 import "ai/AiBackend.js" as AiBackend
@@ -86,17 +87,17 @@ Item {
   property bool mtimesLoaded: false
 
   // Shared theme colors with menu.
-  property color background: Color.menu.background
-  property color foreground: Color.menu.text
-  property color border: Color.menu.border
+  property color background: Commons.Color.menu.background
+  property color foreground: Commons.Color.menu.text
+  property color border: Commons.Color.menu.border
   property var borderSpec: Border.surfaceSpec("menu", "border", border, Math.max(1, Style.space(2)))
-  property color scrim: Color.menu.scrim
-  property color selectedBackground: Color.menu.selectedBackground
-  property color selectedText: Color.menu.selectedText
-  property color accent: Color.accent
-  property color chipActive: Util.alpha(Color.accent, 0.22)
-  property color chipHover: Util.alpha(Color.accent, 0.10)
-  property color chipIdle: Util.alpha(Color.menu.text, 0.07)
+  property color scrim: Commons.Color.menu.scrim
+  property color selectedBackground: Commons.Color.menu.selectedBackground
+  property color selectedText: Commons.Color.menu.selectedText
+  property color accent: Commons.Color.accent
+  property color chipActive: Util.alpha(Commons.Color.accent, 0.22)
+  property color chipHover: Util.alpha(Commons.Color.accent, 0.10)
+  property color chipIdle: Util.alpha(Commons.Color.menu.text, 0.07)
   readonly property int cornerRadius: Style.cornerRadius
   property string fontFamily: Style.font.menuFamily
   // System locale.
@@ -1592,14 +1593,14 @@ Item {
               height: root.aiChipRowHeight
               width: aiChipLabel.implicitWidth + Style.space(18)
               radius: root.cornerRadius
-              color: root.aiSession && root.aiSession.state === "error" ? Util.alpha(Color.urgent, 0.18) : root.chipActive
+              color: root.aiSession && root.aiSession.state === "error" ? Util.alpha(Commons.Color.urgent, 0.18) : root.chipActive
 
               Text {
                 id: aiChipLabel
                 anchors.centerIn: parent
                 text: root.aiChipText()
                 textFormat: Text.PlainText
-                color: root.aiSession && root.aiSession.state === "error" ? Color.urgent : root.accent
+                color: root.aiSession && root.aiSession.state === "error" ? Commons.Color.urgent : root.accent
                 font.family: root.fontFamily
                 font.pixelSize: Math.max(10, Style.font.body - 1)
               }
@@ -1676,7 +1677,7 @@ Item {
                 // failure, not the entire thing as an error.
                 color: (root.aiSession && root.aiSession.state === "error" &&
                         (!root.aiSession.displayedText || root.aiSession.displayedText.length === 0))
-                  ? Color.urgent : root.foreground
+                  ? Commons.Color.urgent : root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body
               }
