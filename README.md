@@ -24,8 +24,8 @@ Whether you are looking for deeply nested project files, academic papers, media 
 
 ## Features
 
-- **Blazing Fast Search:** Concurrent `fd` passes (filename, full path, fuzzy) with accent-insensitive multi-term matching (`cancion` finds `Canción`) and automatic noise filtering (`.git`, `node_modules`, `.cache`, `.venv`, electron storages, trash, etc.).
-- **Optional Instant Index:** With [lince](https://github.com/jfg96/lince) installed, searches come from a resident, inotify-fresh index in a few milliseconds instead of walking the disk, with identical results (and better-ranked ones when a query matches thousands of files). Without it, Omarchy Find keeps using `fd`.
+- **Blazing Fast Search:** Filename, full-path and fuzzy passes with accent-insensitive multi-term matching (`cancion` finds `Canción`) and automatic noise filtering (`.git`, `node_modules`, `.cache`, `.venv`, electron storages, trash, etc.).
+- **Instant Index:** Searches come from [lince](https://github.com/jfg96/lince), a resident, inotify-fresh index, in a few milliseconds instead of walking the disk, with the same results as `fd` (and better-ranked ones when a query matches thousands of files). `fd` remains the automatic fallback.
 - **Full-Path Awareness:** Matches both filenames and parent folder structures (e.g. typing `config` or `hypr` accurately locates `~/.config/hypr`).
 - **Smart Type Categorization:** Dedicated filters for All files, Non-hidden Folders, System Folders (configs & dotfiles), Documents, Multimedia, and Code.
 - **Dynamic Sorting & Results Limits:** On-the-fly reordering (Relevance, Recent, Oldest, A-Z, Z-A) and customizable display limits.
@@ -118,22 +118,14 @@ Omarchy Find will immediately detect the change and resume using whichever agent
 
 ## Install
 
-File search requires Python 3 and `fd`.
-
-```sh
-omarchy pkg add python fd
-```
-
 ```sh
 omarchy plugin add https://github.com/jesseburlamaque/omarchy-find.git --enable
 omarchy restart shell
 ```
 
-### Optional: instant search with lince
+Searches come from [lince](https://github.com/jfg96/lince), a resident filename index that answers in a few milliseconds. The first time the shell starts, `bin/lince-launcher` downloads the lince release pinned in `lince-release.env`, checks its exact size and SHA-256, and keeps it in `~/.local/share/omarchy-find/lince/`; nothing is written into the plugin checkout. lince then indexes your home (about 0.1 s on a warm cache) and follows changes through inotify, for ~40 MB of resident memory and no CPU while idle.
 
-[lince](https://github.com/jfg96/lince) is a resident filename index. When it is on your `PATH` (or at `bin/lince` inside the plugin), Omarchy Find starts it for your home and searches it, falling back to `fd` whenever it is unavailable. Typical searches drop from ~100–300 ms to a few milliseconds and use about a hundredth of the CPU, for ~40 MB of resident memory. See lince's README for installation; then run `omarchy restart shell`.
-
-To keep using `fd` even with lince installed, create `~/.config/omarchy-find/search.json`:
+Until lince is ready, or whenever it is unavailable (no network on first start, an unsupported CPU, a crash), searches walk the disk with `fd`, which Omarchy ships, so search always works. A developer build at `bin/lince` overrides the pinned release, and a lince already serving its socket (for example as a systemd user service) is used as is. To always use `fd`, create `~/.config/omarchy-find/search.json`:
 
 ```json
 { "engine": "fd" }
@@ -239,6 +231,7 @@ This project is a work in progress — suggestions, bug reports, and improvement
 node tests/search_unit_test.js
 tests/search_helper_test.sh
 OMARCHY_FIND_ENGINE=index tests/search_helper_test.sh   # same checks against lince
+tests/lince_launcher_test.sh
 node tests/ai_unit_test.js
 ```
 

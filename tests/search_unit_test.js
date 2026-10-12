@@ -58,10 +58,9 @@ assert(backend.parseSearchConfig('{"engine":"fd"}').engine === "fd", "search.jso
 assert(backend.parseSearchConfig('{"engine":"turbo"}').engine === backend.DEFAULT_ENGINE, "unknown engines are ignored")
 assert(backend.parseSearchConfig("{nope").engine === backend.DEFAULT_ENGINE, "invalid JSON is ignored")
 
-const daemon = backend.buildIndexDaemonArgv("/p/bin/lince", "/run/s.sock", "/home/test")
-assert(daemon[0] === "sh" && daemon[4] === "/p/bin/lince", "the launcher prefers the plugin's own copy")
-assert(daemon[2].includes("command -v lince") && daemon[2].includes("exit " + backend.LINCE_MISSING), "then PATH, else a distinct exit status")
-assert(daemon[5] === "serve" && daemon.includes("--exit-with-parent"), "daemon is tied to the shell")
+const daemon = backend.buildIndexDaemonArgv("/p/bin/lince-launcher", "/run/s.sock", "/home/test")
+assert(daemon[0] === "/p/bin/lince-launcher" && daemon[1] === "serve", "lince starts through the verifying launcher")
+assert(daemon.includes("--exit-with-parent") && daemon[daemon.indexOf("--root") + 1] === "/home/test", "daemon indexes the home and dies with the shell")
 assert(daemon.filter(a => a === "--exclude").length === backend.EXCLUDES.length, "daemon indexes with the base excludes")
 
 const items = backend.itemsFromPaths(["/home/test/.config/hypr/", "relative", "/home/test/a.md"], true, "/home/test")

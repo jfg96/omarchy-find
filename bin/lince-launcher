@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+
+# Resolve the lince release pinned in lince-release.env into the user's XDG
+# data directory, verify it, then execute it (or stop after --prefetch).
+# Exit status 127: no lince can run here (unsupported platform or broken
+# metadata), so callers should not retry soon. Any other failure (no network)
+# may be retried.
+
+set -uo pipefail
+
+plugin_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)" || exit 127
+readonly plugin_dir
+readonly metadata_file="$plugin_dir/lince-release.env"
+readonly repository="jfg96/lince"
+readonly max_bytes=$((32 * 1024 * 1024))
+
+prefetch=false
+if [[ ${1:-} == --prefetch ]]; then
+  prefetch=true
+  shift
+fi
+
+# A developer build at bin/lince (ignored by Git) overrides the release.
+local_lince="$plugin_dir/bin/lince"
+if ! $prefetch && [[ -f $local_lince && ! -L $local_lince && -x $local_lince ]]; then
+  exec "$local_lince" "$@"
+fi
+
+fail() {
+  printf 'lince-launcher: %s\n' "$1" >&2
+  exit "${2:-1}"
+}
+
+for command_name in sha256sum stat; do
+  command -v "$command_name" >/dev/null 2>&1 || fail "required command not found: $command_name" 127
+done
+
+[[ -f $metadata_file && ! -L $metadata_file ]] || fail "lince-release.env is missing or unsafe" 127
+
+lince_tag=""
+lince_asset=""
+lince_size=""
+lince_sha256=""
+lince_source_sha=""
+declare -A seen=()
+while IFS='=' read -r key value || [[ -n ${key:-}${value:-} ]]; do
+  [[ -n $key && -n $value && $key != *[[:space:]]* ]] || fail "lince-release.env is malformed" 127
+  [[ -z ${seen[$key]+x} ]] || fail "lince-release.env repeats $key" 127
+  seen[$key]=1
+  case "$key" in
+    LINCE_TAG) lince_tag="$value" ;;
+    LINCE_ASSET) lince_asset="$value" ;;
+    LINCE_SIZE) lince_size="$value" ;;
+    LINCE_SHA256) lince_sha256="$value" ;;
+    LINCE_SOURCE_SHA) lince_source_sha="$value" ;;
+    *) fail "lince-release.env contains unknown field $key" 127 ;;
+  esac
+done <"$metadata_file"
+
+[[ ${#seen[@]} == 5 ]] || fail "lince-release.env is incomplete" 127
+[[ $lince_tag =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]] || fail "lince tag is invalid" 127
+lince_version="${BASH_REMATCH[1]}"
+[[ $lince_asset == "lince-v${lince_version}-x86_64-linux" ]] || fail "lince asset does not match its tag" 127
+[[ $lince_size =~ ^[1-9][0-9]*$ ]] || fail "lince size is invalid" 127
+(( lince_size <= max_bytes )) || fail "lince size exceeds the safety limit" 127
+[[ $lince_sha256 =~ ^[0-9a-f]{64}$ ]] || fail "lince SHA256 is invalid" 127
+[[ $lince_source_sha =~ ^[0-9a-f]{40}$ ]] || fail "lince source commit is invalid" 127
+
+case "$(uname -s)/$(uname -m)" in
+  Linux/x86_64 | Linux/amd64) ;;
+  *) fail "no prebuilt lince for $(uname -s)/$(uname -m)" 127 ;;
+esac
+
+data_home="${XDG_DATA_HOME:-${HOME:?HOME is not set}/.local/share}"
+while [[ $data_home == */ && $data_home != / ]]; do data_home=${data_home%/}; done
+[[ $data_home == /* ]] || fail "XDG data directory must be absolute" 127
+[[ $data_home != / && $data_home != *//* && $data_home != *$'\n'* ]] || fail "XDG data directory is invalid" 127
+data_root="$data_home/omarchy-find/lince"
+version_dir="$data_root/$lince_tag"
+lince_path="$version_dir/$lince_asset"
+
+# Another user must not be able to swap a checked pathname between
+# verification and execution: every ancestor must be owned by this user or
+# root and not writable by others (unless sticky); our own directories are 0700.
+ensure_cache_path() {
+  local path="$1" current=/ component owner mode details private
+  local -a components
+  IFS=/ read -r -a components <<< "$path"
+  for component in "${components[@]}"; do
+    [[ $component != . && $component != .. ]] || fail "lince cache path contains dot components"
+  done
+  for component in "${components[@]}"; do
+    [[ -n $component ]] || continue
+    if [[ $current == / ]]; then current="/$component"; else current="$current/$component"; fi
+    private=false
+    [[ $current == "$data_home/omarchy-find" || $current == "$data_root" || $current == "$version_dir" ]] && private=true
+    if [[ ! -e $current && ! -L $current ]]; then
+      mkdir -m 0700 -- "$current" 2>/dev/null || [[ -d $current ]] || fail "could not create lince cache directory"
+    fi
+    [[ -d $current && ! -L $current ]] || fail "lince cache path contains a symlink or non-directory"
+    details=$(stat -c '%u %a' -- "$current") || fail "could not inspect lince cache directory"
+    read -r owner mode <<< "$details"
+    [[ $owner == "$EUID" || $owner == 0 ]] || fail "lince cache directory has an unexpected owner"
+    if $private; then
+      [[ $owner == "$EUID" ]] || fail "lince cache directory must belong to the current user"
+      chmod 0700 -- "$current" || fail "could not protect lince cache directory"
+      mode=700
+    fi
+    if (( (8#$mode & 0022) != 0 && (8#$mode & 01000) == 0 )); then
+      fail "lince cache ancestor is writable by another user"
+    fi
+  done
+}
+
+valid_lince() {
+  local candidate="$1" size actual
+  [[ -f $candidate && ! -L $candidate && -x $candidate ]] || return 1
+  size=$(stat -c %s -- "$candidate") || return 1
+  [[ $size == "$lince_size" ]] || return 1
+  actual=$(sha256sum -- "$candidate") || return 1
+  [[ ${actual%% *} == "$lince_sha256" ]]
+}
+
+install_lince() {
+  local stage_dir staged status size url
+  for command_name in curl mktemp; do
+    command -v "$command_name" >/dev/null 2>&1 || fail "required command not found: $command_name" 127
+  done
+  stage_dir=$(mktemp -d "$version_dir/.stage.XXXXXX") || fail "could not create a staging directory"
+  cleanup_stage() { rm -rf -- "$stage_dir"; }
+  trap cleanup_stage RETURN EXIT
+  staged="$stage_dir/$lince_asset"
+  url="https://github.com/$repository/releases/download/$lince_tag/$lince_asset"
+  if curl --fail --location --silent --show-error \
+    --proto '=https' --proto-redir '=https' \
+    --connect-timeout 10 --max-time 300 --max-filesize "$max_bytes" \
+    --output "$staged" "$url"; then
+    :
+  else
+    status=$?
+    (( status == 63 )) && fail "downloaded lince exceeds the safety limit"
+    fail "lince download did not finish; check your connection"
+  fi
+  [[ -f $staged && ! -L $staged ]] || fail "downloaded lince is not a regular file"
+  size=$(stat -c %s -- "$staged") || fail "could not inspect downloaded lince"
+  [[ $size == "$lince_size" ]] || fail "downloaded lince has an unexpected size"
+  chmod 0755 -- "$staged" || fail "could not make lince executable"
+  valid_lince "$staged" || fail "downloaded lince failed its SHA256 check"
+  # A concurrent launcher may have installed the same bytes meanwhile.
+  if ! valid_lince "$lince_path"; then
+    mv -T -- "$staged" "$lince_path" || fail "could not install lince"
+    valid_lince "$lince_path" || fail "installed lince did not verify"
+    sync -f "$lince_path" 2>/dev/null || true
+  fi
+  trap - RETURN EXIT
+  cleanup_stage
+}
+
+ensure_cache_path "$version_dir"
+valid_lince "$lince_path" || install_lince
+
+if $prefetch; then
+  printf 'lince %s\n' "$lince_version"
+  exit 0
+fi
+
+exec "$lince_path" "$@"

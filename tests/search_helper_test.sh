@@ -6,10 +6,9 @@ plugin_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 helper="$plugin_root/bin/omarchy-find-search"
 test_root=$(mktemp -d)
 # OMARCHY_FIND_ENGINE=index runs the same semantics checks against lince's
-# one-shot mode (LINCE overrides the binary; default bin/lince, then PATH).
+# one-shot mode: $LINCE if set, else whatever bin/lince-launcher runs.
 if [[ ${OMARCHY_FIND_ENGINE:-} == index ]]; then
-  lince_bin="${LINCE:-$plugin_root/bin/lince}"
-  [[ -x $lince_bin ]] || lince_bin=$(command -v lince) || { echo "lince not found" >&2; exit 1; }
+  lince_bin="${LINCE:-$plugin_root/bin/lince-launcher}"
   helper="$test_root/index-helper"
 fi
 helper_pid=""

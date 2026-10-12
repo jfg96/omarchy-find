@@ -8,10 +8,11 @@ var MAX_RESULTS = 2000
 var DISPLAY_LIMIT = 60
 var EMPTY_QUERY_DAYS = 30
 
-// Search engines. "index" asks lince (https://github.com/jfg96/lince), a
-// resident filename index, over its Unix socket and falls back to "fd"
-// whenever lince is not installed, not connected, not fresh or not
-// answering; "fd" always walks the disk with fd.
+// Search engines. "index" (default) asks lince (https://github.com/jfg96/lince),
+// a resident filename index that bin/lince-launcher fetches and verifies on
+// first use, over its Unix socket. Searches fall back to "fd" whenever lince
+// is unavailable, not connected, not fresh or not answering; "fd" always
+// walks the disk with fd.
 var DEFAULT_ENGINE = "index"
 // Index answers take a few milliseconds and superseded requests are dropped
 // by the daemon, so typing only needs to coalesce keystrokes, not fd walks.
@@ -351,17 +352,16 @@ function parseSearchConfig(text) {
   return config
 }
 
-// Exit status of the launcher when lince is neither in bin/ nor on PATH.
+// Exit status of bin/lince-launcher when no lince can run here (unsupported
+// platform, broken metadata): not worth retrying soon.
 var LINCE_MISSING = 127
 
-// Starts lince for $HOME unless one is already serving the socket (lince
-// exits at once then, e.g. when it runs as a systemd user service). Prefers
-// a copy in the plugin's bin/, then PATH. The base excludes are fixed at
-// index time; category excludes (System Folders) are applied per request.
-function buildIndexDaemonArgv(localBinary, socketPath, home) {
-  var launcher = 'bin=$1; shift; [ -x "$bin" ] || bin=$(command -v lince) || exit ' + LINCE_MISSING + '; exec "$bin" "$@"'
-  var argv = ["sh", "-c", launcher, "lince-launch", localBinary,
-    "serve", "--socket", socketPath, "--root", home, "--exit-with-parent"]
+// Starts lince for $HOME through the launcher, unless one is already serving
+// the socket (lince exits at once then, e.g. when it runs as a systemd user
+// service). The base excludes are fixed at index time; category excludes
+// (System Folders) are applied per request.
+function buildIndexDaemonArgv(launcher, socketPath, home) {
+  var argv = [launcher, "serve", "--socket", socketPath, "--root", home, "--exit-with-parent"]
   for (var i = 0; i < EXCLUDES.length; i++) argv.push("--exclude", EXCLUDES[i])
   return argv
 }

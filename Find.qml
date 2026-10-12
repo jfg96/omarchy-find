@@ -30,13 +30,14 @@ Item {
   readonly property string searchHelperPath: decodeURIComponent(
     String(Qt.resolvedUrl("bin/omarchy-find-search")).replace(/^file:\/\//, ""))
 
-  // Indexed engine: lince, from bin/lince or PATH. A daemon started here
-  // lives as long as the shell; searches fall back to fd until it answers.
+  // Indexed engine: lince, fetched and verified by bin/lince-launcher. A
+  // daemon started here lives as long as the shell; searches fall back to fd
+  // until it answers.
   property string searchEngine: Backend.DEFAULT_ENGINE
   readonly property string indexBinaryPath: decodeURIComponent(
-    String(Qt.resolvedUrl("bin/lince")).replace(/^file:\/\//, ""))
+    String(Qt.resolvedUrl("bin/lince-launcher")).replace(/^file:\/\//, ""))
   readonly property string indexSocketPath: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/lince/lince.sock"
-  // lince is not installed: stop relaunching it until the config changes.
+  // No lince can run here: stop relaunching it until the next retry.
   property bool indexMissing: false
   readonly property bool indexActive: root.searchEngine === "index" && indexSocket.connected && !root.indexStale
   // Set when the daemon reports it may miss changes; fd is used from then on.
@@ -949,7 +950,7 @@ Item {
     // Exit 0 with a live socket means another instance already serves it.
     onExited: function(exitCode) {
       if (exitCode === Backend.LINCE_MISSING) {
-        // Look again in five minutes, in case it gets installed.
+        // Nothing to retry soon; look again in five minutes.
         root.indexMissing = true
         root.indexRestartDelay = 300000
         indexRestart.restart()
