@@ -5,7 +5,7 @@ import qs.Ui
 
 BarWidget {
   id: root
-  moduleName: "jesseburlamaque.omarchy-find"
+  moduleName: "oma.find"
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight

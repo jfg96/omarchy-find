@@ -1,8 +1,8 @@
 # Omarchy Find
 
-[![Built for Omarchy: Plugin](https://raw.githubusercontent.com/tcballard/omarchy-badges/75975e5b5bf75e7ede3764bcd2950046f7abfe2c/badges/v1/omarchy-plugin.svg)](https://omarchyplugins.com/plugin.html?id=jesseburlamaque.omarchy-find)
-
 A fast, elegant, keyboard-driven universal file search and quick launcher for the [Omarchy](https://github.com/basecamp/omarchy) shell on Linux.
+
+> Fork of [jesseburlamaque/omarchy-find](https://github.com/jesseburlamaque/omarchy-find), maintained by [jfg96](https://github.com/jfg96), with instant search powered by [lince](https://github.com/jfg96/lince).
 
 ![Omarchy Find](preview.png)
 
@@ -119,7 +119,7 @@ Omarchy Find will immediately detect the change and resume using whichever agent
 ## Install
 
 ```sh
-omarchy plugin add https://github.com/jesseburlamaque/omarchy-find.git --enable
+omarchy plugin add https://github.com/jfg96/omarchy-find.git --enable
 omarchy restart shell
 ```
 
@@ -133,7 +133,7 @@ Until lince is ready, or whenever it is unavailable (no network on first start, 
 
 > **Tip (Optional):** To assign the global keyboard shortcut (`Alt + Space`) and enable the `omarchy-find` command in your terminal, run:
 > ```sh
-> ~/.config/omarchy/plugins/jesseburlamaque.omarchy-find/bin/omarchy-find setup-keybind
+> ~/.config/omarchy/plugins/oma.find/bin/omarchy-find setup-keybind
 > ```
 > *(Or pass a custom shortcut, e.g. `... setup-keybind "SUPER + F"`)*
 
@@ -187,8 +187,8 @@ omarchy > menu >  Disable Plugin > Omarchy Find
 Or use the CLI:
 
 ```sh
-omarchy plugin enable jesseburlamaque.omarchy-find
-omarchy plugin disable jesseburlamaque.omarchy-find
+omarchy plugin enable oma.find
+omarchy plugin disable oma.find
 ```
 
 After enabling or disabling, restart the shell:
@@ -200,7 +200,7 @@ omarchy restart shell
 ## Update
 
 ```sh
-omarchy plugin update jesseburlamaque.omarchy-find --yes
+omarchy plugin update oma.find --yes
 omarchy restart shell
 ```
 
@@ -208,7 +208,7 @@ omarchy restart shell
 
 1. Remove the plugin from Omarchy shell:
 ```sh
-omarchy plugin remove jesseburlamaque.omarchy-find
+omarchy plugin remove oma.find
 omarchy restart shell
 ```
 

@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-PLUGIN_ID="jesseburlamaque.omarchy-find"
+PLUGIN_ID="oma.find"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
@@ -63,10 +63,10 @@ EOF
     fi
 
     # Remove previous omarchy-find bindings if present
-    if grep -E -q "omarchy-find|jesseburlamaque\.omarchy-find" "$BINDINGS_FILE"; then
+    if grep -E -q "omarchy-find|jesseburlamaque\.omarchy-find|oma\.find" "$BINDINGS_FILE"; then
       sed -i '/Omarchy Find/d' "$BINDINGS_FILE"
       sed -i '/omarchy-find/d' "$BINDINGS_FILE"
-      sed -i '/jesseburlamaque\.omarchy-find/d' "$BINDINGS_FILE"
+      sed -i '/jesseburlamaque\.omarchy-find/d; /shell toggle oma\.find/d' "$BINDINGS_FILE"
     fi
 
     cat <<EOF >> "$BINDINGS_FILE"
@@ -87,7 +87,7 @@ EOF
     if [ -f "$BINDINGS_FILE" ]; then
       sed -i '/Omarchy Find/d' "$BINDINGS_FILE"
       sed -i '/omarchy-find/d' "$BINDINGS_FILE"
-      sed -i '/jesseburlamaque\.omarchy-find/d' "$BINDINGS_FILE"
+      sed -i '/jesseburlamaque\.omarchy-find/d; /shell toggle oma\.find/d' "$BINDINGS_FILE"
       echo "✓ Atalho do Omarchy Find removido de $BINDINGS_FILE"
       if command -v hyprctl >/dev/null 2>&1; then
         hyprctl reload >/dev/null 2>&1 || true

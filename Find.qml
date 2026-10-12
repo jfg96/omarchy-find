@@ -168,7 +168,7 @@ Item {
   }
 
   function pluginId() {
-    return (root.manifest && root.manifest.id) || "jesseburlamaque.omarchy-find"
+    return (root.manifest && root.manifest.id) || "oma.find"
   }
 
   function open(payloadJson) {
