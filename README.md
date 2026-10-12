@@ -2,7 +2,7 @@
 
 A fast, elegant, keyboard-driven universal file search and quick launcher for the [Omarchy](https://github.com/basecamp/omarchy) shell on Linux.
 
-> Fork of [jesseburlamaque/omarchy-find](https://github.com/jesseburlamaque/omarchy-find), maintained by [jfg96](https://github.com/jfg96), with instant search powered by [lince](https://github.com/jfg96/lince).
+> Fork of [jesseburlamaque/omarchy-find](https://github.com/jesseburlamaque/omarchy-find), with instant search powered by [lince](https://github.com/jfg96/lince).
 
 ![Omarchy Find](preview.png)
 
