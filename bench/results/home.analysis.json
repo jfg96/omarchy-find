@@ -1,0 +1,121 @@
+{
+ "summary": {
+  "cases": 72,
+  "classic_median_of_medians_ms": 109.30452549837355,
+  "index_median_of_medians_ms": 3.661871750409773,
+  "classic_max_ms": 213.75196000008145,
+  "index_max_ms": 28.874664500108338,
+  "classic_p95_case_ms": 199.88269399982528,
+  "index_p95_case_ms": 10.873324497879366,
+  "classic_cpu_median_ms": 1349.4614999999967,
+  "index_cpu_median_ms": 10.0,
+  "classic_cpu_total_ms": 99625.82699999996,
+  "index_cpu_total_ms": 972.0,
+  "parity_checked": 65,
+  "parity_same": 64,
+  "capped_cases": 7,
+  "ready_ms": 111.11508100293577,
+  "daemon_status": {
+   "status": true,
+   "entries": 313826,
+   "dead": 0,
+   "index_bytes": 29467519,
+   "rss_kib": 50096,
+   "watches": 34410,
+   "degraded": false,
+   "generation": 313826
+  }
+ },
+ "quality": [
+  {
+   "query": "config",
+   "filter": 0,
+   "matches": 39403,
+   "classic_overlap": 60,
+   "index_overlap": 60,
+   "classic_exact_order": true,
+   "index_exact_order": true,
+   "ideal_len": 60,
+   "rank_ms_v8": 6.981616
+  },
+  {
+   "query": "a",
+   "filter": 0,
+   "matches": 311335,
+   "classic_overlap": 10,
+   "index_overlap": 60,
+   "classic_exact_order": false,
+   "index_exact_order": true,
+   "ideal_len": 60,
+   "rank_ms_v8": 6.796252
+  },
+  {
+   "query": "a",
+   "filter": 1,
+   "matches": 12138,
+   "classic_overlap": 14,
+   "index_overlap": 60,
+   "classic_exact_order": false,
+   "index_exact_order": true,
+   "ideal_len": 60,
+   "rank_ms_v8": 3.829845
+  },
+  {
+   "query": "a",
+   "filter": 3,
+   "matches": 21785,
+   "classic_overlap": 60,
+   "index_overlap": 60,
+   "classic_exact_order": true,
+   "index_exact_order": true,
+   "ideal_len": 60,
+   "rank_ms_v8": 4.280463
+  },
+  {
+   "query": "a",
+   "filter": 4,
+   "matches": 7498,
+   "classic_overlap": 52,
+   "index_overlap": 60,
+   "classic_exact_order": false,
+   "index_exact_order": true,
+   "ideal_len": 60,
+   "rank_ms_v8": 3.956187
+  },
+  {
+   "query": "a",
+   "filter": 7,
+   "matches": 67560,
+   "classic_overlap": 1,
+   "index_overlap": 60,
+   "classic_exact_order": false,
+   "index_exact_order": true,
+   "ideal_len": 60,
+   "rank_ms_v8": 4.044696
+  },
+  {
+   "query": "main rs",
+   "filter": 0,
+   "matches": 3642,
+   "classic_overlap": 58,
+   "index_overlap": 60,
+   "classic_exact_order": false,
+   "index_exact_order": true,
+   "ideal_len": 60,
+   "rank_ms_v8": 4.878161
+  }
+ ],
+ "mismatches": [
+  [
+   "a",
+   2,
+   "dirs",
+   [
+    "/home/javi/.local/share/Trash",
+    "/home/javi/.local/share/Trash/files",
+    "/home/javi/.local/share/Trash/files/Work"
+   ],
+   []
+  ]
+ ]
+}

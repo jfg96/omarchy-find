@@ -25,6 +25,7 @@ Whether you are looking for deeply nested project files, academic papers, media 
 ## Features
 
 - **Blazing Fast Search:** Concurrent `fd` passes (filename, full path, fuzzy) with accent-insensitive multi-term matching (`cancion` finds `Canción`) and automatic noise filtering (`.git`, `node_modules`, `.cache`, `.venv`, electron storages, trash, etc.).
+- **Optional Instant Index:** With [lince](https://github.com/jfg96/lince) installed, searches come from a resident, inotify-fresh index in a few milliseconds instead of walking the disk, with identical results (and better-ranked ones when a query matches thousands of files). Without it, Omarchy Find keeps using `fd`.
 - **Full-Path Awareness:** Matches both filenames and parent folder structures (e.g. typing `config` or `hypr` accurately locates `~/.config/hypr`).
 - **Smart Type Categorization:** Dedicated filters for All files, Non-hidden Folders, System Folders (configs & dotfiles), Documents, Multimedia, and Code.
 - **Dynamic Sorting & Results Limits:** On-the-fly reordering (Relevance, Recent, Oldest, A-Z, Z-A) and customizable display limits.
@@ -128,6 +129,16 @@ omarchy plugin add https://github.com/jesseburlamaque/omarchy-find.git --enable
 omarchy restart shell
 ```
 
+### Optional: instant search with lince
+
+[lince](https://github.com/jfg96/lince) is a resident filename index. When it is on your `PATH` (or at `bin/lince` inside the plugin), Omarchy Find starts it for your home and searches it, falling back to `fd` whenever it is unavailable. Typical searches drop from ~100–300 ms to a few milliseconds and use about a hundredth of the CPU, for ~40 MB of resident memory. See lince's README for installation; then run `omarchy restart shell`.
+
+To keep using `fd` even with lince installed, create `~/.config/omarchy-find/search.json`:
+
+```json
+{ "engine": "fd" }
+```
+
 > **Tip (Optional):** To assign the global keyboard shortcut (`Alt + Space`) and enable the `omarchy-find` command in your terminal, run:
 > ```sh
 > ~/.config/omarchy/plugins/jesseburlamaque.omarchy-find/bin/omarchy-find setup-keybind
@@ -227,8 +238,11 @@ This project is a work in progress — suggestions, bug reports, and improvement
 ```sh
 node tests/search_unit_test.js
 tests/search_helper_test.sh
+OMARCHY_FIND_ENGINE=index tests/search_helper_test.sh   # same checks against lince
 node tests/ai_unit_test.js
 ```
+
+`bench/` compares the fd helper and lince (latency, CPU, parity, ranking quality, live updates); see `bench/README.md`.
 
 ---
 

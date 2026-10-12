@@ -1,0 +1,175 @@
+{
+ "summary": {
+  "cases": 72,
+  "classic_median_of_medians_ms": 78.67174275088473,
+  "index_median_of_medians_ms": 1.9794455001829192,
+  "classic_max_ms": 105.74314499899629,
+  "index_max_ms": 11.125627001092653,
+  "classic_p95_case_ms": 103.10250149996136,
+  "index_p95_case_ms": 6.626433498240658,
+  "classic_cpu_median_ms": 325.2769999999996,
+  "index_cpu_median_ms": 5.0,
+  "classic_cpu_total_ms": 31659.164500000003,
+  "index_cpu_total_ms": 434.0,
+  "parity_checked": 59,
+  "parity_same": 59,
+  "capped_cases": 13,
+  "ready_ms": 55.9582429996226,
+  "daemon_status": {
+   "status": true,
+   "entries": 97453,
+   "dead": 0,
+   "index_bytes": 10254218,
+   "rss_kib": 16516,
+   "watches": 9267,
+   "degraded": false,
+   "generation": 97453
+  }
+ },
+ "quality": [
+  {
+   "query": "hypr",
+   "filter": 0,
+   "matches": 11446,
+   "classic_overlap": 60,
+   "index_overlap": 60,
+   "classic_exact_order": true,
+   "index_exact_order": true,
+   "ideal_len": 60,
+   "rank_ms_v8": 7.43605
+  },
+  {
+   "query": "cancion",
+   "filter": 0,
+   "matches": 18605,
+   "classic_overlap": 55,
+   "index_overlap": 60,
+   "classic_exact_order": false,
+   "index_exact_order": true,
+   "ideal_len": 60,
+   "rank_ms_v8": 9.953055
+  },
+  {
+   "query": "cancion",
+   "filter": 7,
+   "matches": 2412,
+   "classic_overlap": 60,
+   "index_overlap": 60,
+   "classic_exact_order": true,
+   "index_exact_order": true,
+   "ideal_len": 60,
+   "rank_ms_v8": 6.811922
+  },
+  {
+   "query": "informe",
+   "filter": 0,
+   "matches": 20211,
+   "classic_overlap": 59,
+   "index_overlap": 60,
+   "classic_exact_order": false,
+   "index_exact_order": true,
+   "ideal_len": 60,
+   "rank_ms_v8": 8.639456
+  },
+  {
+   "query": "informe",
+   "filter": 7,
+   "matches": 2599,
+   "classic_overlap": 60,
+   "index_overlap": 60,
+   "classic_exact_order": true,
+   "index_exact_order": true,
+   "ideal_len": 60,
+   "rank_ms_v8": 5.691627
+  },
+  {
+   "query": "config",
+   "filter": 0,
+   "matches": 25420,
+   "classic_overlap": 56,
+   "index_overlap": 60,
+   "classic_exact_order": false,
+   "index_exact_order": true,
+   "ideal_len": 60,
+   "rank_ms_v8": 9.31835
+  },
+  {
+   "query": "a",
+   "filter": 0,
+   "matches": 96916,
+   "classic_overlap": 4,
+   "index_overlap": 60,
+   "classic_exact_order": false,
+   "index_exact_order": true,
+   "ideal_len": 60,
+   "rank_ms_v8": 9.042877
+  },
+  {
+   "query": "a",
+   "filter": 1,
+   "matches": 3270,
+   "classic_overlap": 52,
+   "index_overlap": 60,
+   "classic_exact_order": false,
+   "index_exact_order": true,
+   "ideal_len": 60,
+   "rank_ms_v8": 4.960282
+  },
+  {
+   "query": "a",
+   "filter": 3,
+   "matches": 7994,
+   "classic_overlap": 16,
+   "index_overlap": 60,
+   "classic_exact_order": false,
+   "index_exact_order": true,
+   "ideal_len": 60,
+   "rank_ms_v8": 5.98777
+  },
+  {
+   "query": "a",
+   "filter": 4,
+   "matches": 3997,
+   "classic_overlap": 37,
+   "index_overlap": 60,
+   "classic_exact_order": false,
+   "index_exact_order": true,
+   "ideal_len": 60,
+   "rank_ms_v8": 5.140761
+  },
+  {
+   "query": "a",
+   "filter": 7,
+   "matches": 10384,
+   "classic_overlap": 14,
+   "index_overlap": 60,
+   "classic_exact_order": false,
+   "index_exact_order": true,
+   "ideal_len": 60,
+   "rank_ms_v8": 5.683697
+  },
+  {
+   "query": "pdf",
+   "filter": 0,
+   "matches": 3798,
+   "classic_overlap": 28,
+   "index_overlap": 60,
+   "classic_exact_order": false,
+   "index_exact_order": true,
+   "ideal_len": 60,
+   "rank_ms_v8": 5.996986
+  },
+  {
+   "query": "main rs",
+   "filter": 0,
+   "matches": 2177,
+   "classic_overlap": 60,
+   "index_overlap": 60,
+   "classic_exact_order": true,
+   "index_exact_order": true,
+   "ideal_len": 60,
+   "rank_ms_v8": 7.556154
+  }
+ ],
+ "mismatches": []
+}

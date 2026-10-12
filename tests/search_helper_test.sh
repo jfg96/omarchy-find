@@ -5,6 +5,13 @@ set -euo pipefail
 plugin_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 helper="$plugin_root/bin/omarchy-find-search"
 test_root=$(mktemp -d)
+# OMARCHY_FIND_ENGINE=index runs the same semantics checks against lince's
+# one-shot mode (LINCE overrides the binary; default bin/lince, then PATH).
+if [[ ${OMARCHY_FIND_ENGINE:-} == index ]]; then
+  lince_bin="${LINCE:-$plugin_root/bin/lince}"
+  [[ -x $lince_bin ]] || lince_bin=$(command -v lince) || { echo "lince not found" >&2; exit 1; }
+  helper="$test_root/index-helper"
+fi
 helper_pid=""
 child_pids_file=""
 cleanup() {
@@ -15,6 +22,18 @@ cleanup() {
   rm -rf -- "$test_root"
 }
 trap cleanup EXIT
+
+if [[ ${OMARCHY_FIND_ENGINE:-} == index ]]; then
+  # Translate the helper's flags into the request Find.qml sends to lince.
+  {
+    printf '%s\n' '#!/bin/bash' 'args=()' 'while (( $# )); do' '  case $1 in' \
+      '    --home) args+=(--root "$2"); shift ;;' \
+      '    --system-folders) args+=(--scope .config --scope .local/share --max-depth 3) ;;' \
+      '    *) args+=("$1") ;;' '  esac' '  shift' 'done'
+    printf 'exec %q oneshot "${args[@]}"\n' "$lince_bin"
+  } > "$helper"
+  chmod +x "$helper"
+fi
 
 passed=0
 check() {
@@ -84,6 +103,11 @@ check test "$(run_helper --query order --kind f --max-results 1)" == "$home/orde
 
 # Fuzzy subsequence matching is the fallback when nothing else matches.
 check contains "$(run_helper --query omfind --kind f)" "omarchy-find.md"
+
+if [[ ${OMARCHY_FIND_ENGINE:-} == index ]]; then
+  echo "$passed search helper integration tests passed (indexed engine)"
+  exit 0
+fi
 
 # Reaching the result limit must consume one complete NUL-delimited record and
 # terminate every fd pass without waiting for a large stdout chunk or EOF.

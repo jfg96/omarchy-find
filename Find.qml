@@ -30,6 +30,22 @@ Item {
   readonly property string searchHelperPath: decodeURIComponent(
     String(Qt.resolvedUrl("bin/omarchy-find-search")).replace(/^file:\/\//, ""))
 
+  // Indexed engine: lince, from bin/lince or PATH. A daemon started here
+  // lives as long as the shell; searches fall back to fd until it answers.
+  property string searchEngine: Backend.DEFAULT_ENGINE
+  readonly property string indexBinaryPath: decodeURIComponent(
+    String(Qt.resolvedUrl("bin/lince")).replace(/^file:\/\//, ""))
+  readonly property string indexSocketPath: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/lince/lince.sock"
+  // lince is not installed: stop relaunching it until the config changes.
+  property bool indexMissing: false
+  readonly property bool indexActive: root.searchEngine === "index" && indexSocket.connected && !root.indexStale
+  // Set when the daemon reports it may miss changes; fd is used from then on.
+  property bool indexStale: false
+  property int indexPendingGen: -1
+  // Generation whose index request failed and must be redone with fd.
+  property int fdFallbackGen: -1
+  property int indexRestartDelay: 2000
+
   readonly property bool isGoogleSearch: /^\s*go\s+/i.test(root.filterText)
   readonly property string googleSearchTerms: isGoogleSearch ? root.filterText.replace(/^\s*go\s+/i, "").trim() : ""
 
@@ -170,6 +186,8 @@ Item {
 
   function cancelProcs() {
     debounce.stop()
+    indexTimeout.stop()
+    root.indexPendingGen = -1
     root.searchGen++
     root.stopSearchProcess(procDirs)
     root.stopSearchProcess(procFiles)
@@ -353,6 +371,16 @@ Item {
     root.searching = true
     root.pendingItems = []
     root.mtimesLoaded = false
+    if (root.indexActive && root.fdFallbackGen !== root.searchGen) {
+      // One request covers directories and files; the answer carries the
+      // mtimes the stat pass would otherwise fetch.
+      root.indexPendingGen = root.searchGen
+      indexSocket.write(JSON.stringify(Backend.buildIndexRequest(root.filterText, root.activeFilter, root.searchGen, root.home)) + "\n")
+      indexSocket.flush()
+      indexTimeout.restart()
+      return
+    }
+    root.indexPendingGen = -1
     var filter = Backend.FILTERS[root.activeFilter] || Backend.FILTERS[0]
     var pending = 0
     if (filter.dirs) {
@@ -375,6 +403,51 @@ Item {
     if (pending === 0) {
       root.searching = false
       root.presentResults([])
+    }
+  }
+
+  function indexResponse(line) {
+    var resp
+    try { resp = JSON.parse(line) } catch (e) { return }
+    if (!resp || resp.superseded || resp.id !== root.indexPendingGen || resp.id !== root.searchGen) return
+    indexTimeout.stop()
+    root.indexPendingGen = -1
+    if (resp.error || resp.fresh === false) {
+      // The index may be missing changes: redo this search, and the next
+      // ones, with fd.
+      root.indexStale = resp.fresh === false
+      root.redoWithFd()
+      return
+    }
+    for (var path in resp.mtimes) root.mtimesMap[path] = resp.mtimes[path]
+    root.searching = false
+    root.mtimesLoaded = true
+    root.presentResults(Backend.itemsFromPaths(resp.dirs, true, root.home)
+      .concat(Backend.itemsFromPaths(resp.files, false, root.home)), true)
+  }
+
+  // An index request lost to a disconnect or a timeout is redone with fd.
+  function indexFallback() {
+    if (root.indexPendingGen !== root.searchGen || !root.searching) return
+    root.redoWithFd()
+  }
+
+  function redoWithFd() {
+    root.indexPendingGen = -1
+    root.fdFallbackGen = root.searchGen
+    root.rerunPending = true
+    root.maybeLaunchPendingSearch()
+  }
+
+  function ensureIndexDaemon() {
+    if (root.searchEngine !== "index") {
+      if (indexDaemon.running) indexDaemon.running = false
+      indexSocket.connected = false
+      return
+    }
+    if (!indexDaemon.running && !root.indexMissing) {
+      indexDaemon.command = Backend.buildIndexDaemonArgv(root.indexBinaryPath, root.indexSocketPath, root.home)
+      indexDaemon.running = true
     }
   }
 
@@ -403,7 +476,7 @@ Item {
     root.presentResults(root.pendingItems)
   }
 
-  function presentResults(items) {
+  function presentResults(items, mtimesKnown) {
     if (root.isGoogleSearch) return
     root.rawItems = items || []
     for (var j = 0; j < root.rawItems.length; j++) {
@@ -430,7 +503,7 @@ Item {
     if (root.selectedIndex >= displayModel.count) root.selectedIndex = displayModel.count - 1
     if (root.selectedIndex < 0) root.selectedIndex = 0
     resultList.positionViewAtIndex(root.selectedIndex, ListView.Contain)
-    root.fetchMtimes()
+    if (!mtimesKnown) root.fetchMtimes()
   }
 
   // Batch stat for mtimes across raw candidate items.
@@ -838,8 +911,93 @@ Item {
 
   Timer {
     id: debounce
-    interval: 200
+    interval: Backend.debounceMs(root.indexActive, root.filterText)
     onTriggered: root.runSearch()
+  }
+
+  // ~/.config/omarchy-find/search.json: optional, hot-reloaded like ai.json.
+  FileView {
+    id: searchConfigFile
+    path: root.home + "/.config/omarchy-find/search.json"
+    watchChanges: true
+    printErrors: false
+    onLoaded: root.applySearchConfig(text())
+    onLoadFailed: root.applySearchConfig(null)
+    onFileChanged: reload()
+  }
+
+  // A missing ~/.config/omarchy-find/ gives FileView nothing to watch, so it
+  // reports nothing until reload() runs (same gap aiConfigWatchdog covers).
+  Component.onCompleted: searchConfigFile.reload()
+
+  function applySearchConfig(text) {
+    var engine = Backend.parseSearchConfig(text).engine
+    if (engine === root.searchEngine && (engine !== "index" || indexDaemon.running || root.indexMissing)) return
+    root.searchEngine = engine
+    root.indexStale = false
+    root.indexMissing = false
+    root.ensureIndexDaemon()
+  }
+
+  Process {
+    id: indexDaemon
+    // The daemon exits when this pipe closes, i.e. when the shell goes away.
+    stdinEnabled: true
+    stderr: SplitParser {
+      onRead: function(line) { console.log(line) }
+    }
+    // Exit 0 with a live socket means another instance already serves it.
+    onExited: function(exitCode) {
+      if (exitCode === Backend.LINCE_MISSING) {
+        // Look again in five minutes, in case it gets installed.
+        root.indexMissing = true
+        root.indexRestartDelay = 300000
+        indexRestart.restart()
+        return
+      }
+      if (root.searchEngine === "index" && (exitCode !== 0 || !indexSocket.connected)) indexRestart.restart()
+    }
+  }
+
+  // Restart a daemon that died, backing off up to five minutes.
+  Timer {
+    id: indexRestart
+    interval: root.indexRestartDelay
+    onTriggered: {
+      root.indexRestartDelay = Math.min(root.indexRestartDelay * 2, 300000)
+      root.indexMissing = false
+      root.ensureIndexDaemon()
+    }
+  }
+
+  Socket {
+    id: indexSocket
+    path: root.indexSocketPath
+    parser: SplitParser {
+      onRead: function(line) { root.indexResponse(line) }
+    }
+    onConnectionStateChanged: {
+      if (connected) {
+        root.indexRestartDelay = 2000
+      } else {
+        root.indexFallback()
+      }
+    }
+  }
+
+  // The daemon binds its socket only once the index is ready; keep trying
+  // to connect until then (and after a restart).
+  Timer {
+    interval: 500
+    repeat: true
+    running: root.searchEngine === "index" && !indexSocket.connected && !root.indexMissing
+    onTriggered: indexSocket.connected = true
+  }
+
+  Timer {
+    id: indexTimeout
+    interval: Backend.INDEX_TIMEOUT_MS
+    onTriggered: root.indexFallback()
   }
 
   Process {
@@ -939,6 +1097,7 @@ Item {
     running: true
     onTriggered: {
       aiConfigFile.reload()
+      searchConfigFile.reload()
       omarchyAgentFile.reload()
     }
   }

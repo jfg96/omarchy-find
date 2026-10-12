@@ -1,0 +1,59 @@
+{
+ "ready_ms": 4.853711998293875,
+ "read_your_writes": {
+  "operations": 900,
+  "stale_answers": 0,
+  "query_after_change_median_ms": 0.3743029992619995
+ },
+ "stress": {
+  "operations": 4000,
+  "by_type": {
+   "move_dir": 245,
+   "mkfile": 951,
+   "mkdir_populate": 700,
+   "move_in": 434,
+   "rename": 469,
+   "to_excluded": 233,
+   "rm": 249,
+   "rmtree": 240,
+   "move_out": 246,
+   "to_hidden": 233
+  },
+  "ops_wall_ms": 3001.099682998756,
+  "first_query_after_ms": 0.5049030005466193,
+  "index_entries": 57,
+  "fd_entries": 57,
+  "missing": [],
+  "extra": [],
+  "identical": true
+ },
+ "dir_rename_10k": {
+  "descendants": 10100,
+  "rename_plus_query_ms": 1.3199569984863047,
+  "found": true
+ },
+ "wide_dir": {
+  "files": 20000,
+  "create_wall_ms": 238.0244589985523,
+  "catch_up_query_ms": 15.044085997942602,
+  "identical": true
+ },
+ "overflow": {
+  "files_created": 21384,
+  "queue_limit": 16384,
+  "recover_query_ms": 50.376136001432315,
+  "identical": true,
+  "missing": 0,
+  "extra": 0
+ },
+ "status": {
+  "status": true,
+  "entries": 31543,
+  "dead": 0,
+  "index_bytes": 2378872,
+  "rss_kib": 13904,
+  "watches": 112,
+  "degraded": false,
+  "generation": 78260
+ }
+}

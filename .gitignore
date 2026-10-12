@@ -4,3 +4,4 @@ node_modules/
 install.sh
 BACKLOG.md
 media/*.mp4
+bin/lince

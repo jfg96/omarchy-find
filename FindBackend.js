@@ -8,6 +8,21 @@ var MAX_RESULTS = 2000
 var DISPLAY_LIMIT = 60
 var EMPTY_QUERY_DAYS = 30
 
+// Search engines. "index" asks lince (https://github.com/jfg96/lince), a
+// resident filename index, over its Unix socket and falls back to "fd"
+// whenever lince is not installed, not connected, not fresh or not
+// answering; "fd" always walks the disk with fd.
+var DEFAULT_ENGINE = "index"
+// Index answers take a few milliseconds and superseded requests are dropped
+// by the daemon, so typing only needs to coalesce keystrokes, not fd walks.
+var FD_DEBOUNCE_MS = 200
+var INDEX_DEBOUNCE_MS = 30
+// One or two characters match most of the index (5-10x the work of a longer
+// query) and are rarely the final query, so they wait a little longer.
+var INDEX_SHORT_DEBOUNCE_MS = 100
+// An index request that has not been answered by then is redone with fd.
+var INDEX_TIMEOUT_MS = 1500
+
 // Excluded noisy directories.
 var EXCLUDES = [
   ".git",
@@ -319,6 +334,63 @@ function buildArgv(query, filterIndex, forDirs, home, helperPath) {
   return argv
 }
 
+function debounceMs(indexActive, query) {
+  if (!indexActive) return FD_DEBOUNCE_MS
+  return String(query || "").trim().length < 3 ? INDEX_SHORT_DEBOUNCE_MS : INDEX_DEBOUNCE_MS
+}
+
+// ~/.config/omarchy-find/search.json, e.g. {"engine": "fd"}. Anything
+// missing or invalid means the default engine.
+function parseSearchConfig(text) {
+  var config = { engine: DEFAULT_ENGINE }
+  if (!text) return config
+  try {
+    var parsed = JSON.parse(text)
+    if (parsed && (parsed.engine === "index" || parsed.engine === "fd")) config.engine = parsed.engine
+  } catch (e) { /* defaults */ }
+  return config
+}
+
+// Exit status of the launcher when lince is neither in bin/ nor on PATH.
+var LINCE_MISSING = 127
+
+// Starts lince for $HOME unless one is already serving the socket (lince
+// exits at once then, e.g. when it runs as a systemd user service). Prefers
+// a copy in the plugin's bin/, then PATH. The base excludes are fixed at
+// index time; category excludes (System Folders) are applied per request.
+function buildIndexDaemonArgv(localBinary, socketPath, home) {
+  var launcher = 'bin=$1; shift; [ -x "$bin" ] || bin=$(command -v lince) || exit ' + LINCE_MISSING + '; exec "$bin" "$@"'
+  var argv = ["sh", "-c", launcher, "lince-launch", localBinary,
+    "serve", "--socket", socketPath, "--root", home, "--exit-with-parent"]
+  for (var i = 0; i < EXCLUDES.length; i++) argv.push("--exclude", EXCLUDES[i])
+  return argv
+}
+
+// lince request: the same filters buildArgv hands to fd, for directories
+// and files at once. An empty query browses.
+function buildIndexRequest(query, filterIndex, id, home) {
+  var filter = FILTERS[filterIndex] || FILTERS[0]
+  var kinds = []
+  if (filter.dirs) kinds.push("d")
+  if (filter.files) kinds.push("f")
+  var exclude = EXCLUDES.slice()
+  if (filter.systemFolders) exclude = exclude.concat(SYSTEM_EXCLUDES)
+  return {
+    id: id || 0,
+    query: String(query || "").trim(),
+    kinds: kinds,
+    max_results: MAX_RESULTS,
+    extensions: filter.files ? filter.exts.slice() : [],
+    exclude: exclude,
+    hidden: filter.hidden === true,
+    roots: home ? [home] : [],
+    // System Folders: like fd --max-depth 3 over ~/.config and ~/.local/share.
+    scopes: filter.systemFolders ? [".config", ".local/share"] : [],
+    max_depth: filter.systemFolders ? 3 : null,
+    mtimes: 300
+  }
+}
+
 function basename(path) {
   var idx = path.lastIndexOf("/")
   return idx === -1 ? path : path.slice(idx + 1)
@@ -403,8 +475,12 @@ function isSystemPath(path, home) {
 }
 
 function parseLines(text, isDir, home) {
+  return itemsFromPaths(String(text || "").split("\n"), isDir, home)
+}
+
+function itemsFromPaths(lines, isDir, home) {
   var out = []
-  var lines = String(text || "").split("\n")
+  lines = lines || []
   for (var i = 0; i < lines.length; i++) {
     // Strip trailing slash from directories.
     var path = lines[i].replace(/\/+$/, "")

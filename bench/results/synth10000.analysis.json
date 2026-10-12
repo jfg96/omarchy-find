@@ -1,0 +1,43 @@
+{
+ "summary": {
+  "cases": 72,
+  "classic_median_of_medians_ms": 71.60182999905373,
+  "index_median_of_medians_ms": 0.7454669994331198,
+  "classic_max_ms": 94.20628550105903,
+  "index_max_ms": 10.416485500172712,
+  "classic_p95_case_ms": 91.60846449958626,
+  "index_p95_case_ms": 2.9247825004858896,
+  "classic_cpu_median_ms": 144.8947500000006,
+  "index_cpu_median_ms": 0.5,
+  "classic_cpu_total_ms": 11359.874500000004,
+  "index_cpu_total_ms": 70.5,
+  "parity_checked": 71,
+  "parity_same": 71,
+  "capped_cases": 1,
+  "ready_ms": 8.446676998573821,
+  "daemon_status": {
+   "status": true,
+   "entries": 9899,
+   "dead": 0,
+   "index_bytes": 1208320,
+   "rss_kib": 6696,
+   "watches": 1079,
+   "degraded": false,
+   "generation": 9899
+  }
+ },
+ "quality": [
+  {
+   "query": "a",
+   "filter": 0,
+   "matches": 9697,
+   "classic_overlap": 23,
+   "index_overlap": 60,
+   "classic_exact_order": false,
+   "index_exact_order": true,
+   "ideal_len": 60,
+   "rank_ms_v8": 7.437997
+  }
+ ],
+ "mismatches": []
+}

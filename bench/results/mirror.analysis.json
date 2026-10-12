@@ -1,0 +1,109 @@
+{
+ "summary": {
+  "cases": 72,
+  "classic_median_of_medians_ms": 94.99359799974627,
+  "index_median_of_medians_ms": 3.232969499549654,
+  "classic_max_ms": 214.29719000116165,
+  "index_max_ms": 31.811490500331274,
+  "classic_p95_case_ms": 207.68444850182277,
+  "index_p95_case_ms": 10.0674834993697,
+  "classic_cpu_median_ms": 1042.0219999999958,
+  "index_cpu_median_ms": 9.5,
+  "classic_cpu_total_ms": 87881.08349999988,
+  "index_cpu_total_ms": 950.0,
+  "parity_checked": 65,
+  "parity_same": 65,
+  "capped_cases": 7,
+  "ready_ms": 105.50532900015241,
+  "daemon_status": {
+   "status": true,
+   "entries": 294465,
+   "dead": 0,
+   "index_bytes": 27909750,
+   "rss_kib": 50256,
+   "watches": 33821,
+   "degraded": false,
+   "generation": 294465
+  }
+ },
+ "quality": [
+  {
+   "query": "config",
+   "filter": 0,
+   "matches": 39406,
+   "classic_overlap": 60,
+   "index_overlap": 60,
+   "classic_exact_order": true,
+   "index_exact_order": true,
+   "ideal_len": 60,
+   "rank_ms_v8": 7.29459
+  },
+  {
+   "query": "a",
+   "filter": 0,
+   "matches": 291953,
+   "classic_overlap": 2,
+   "index_overlap": 60,
+   "classic_exact_order": false,
+   "index_exact_order": true,
+   "ideal_len": 60,
+   "rank_ms_v8": 6.760109
+  },
+  {
+   "query": "a",
+   "filter": 1,
+   "matches": 11621,
+   "classic_overlap": 32,
+   "index_overlap": 60,
+   "classic_exact_order": false,
+   "index_exact_order": true,
+   "ideal_len": 60,
+   "rank_ms_v8": 4.077193
+  },
+  {
+   "query": "a",
+   "filter": 3,
+   "matches": 21760,
+   "classic_overlap": 60,
+   "index_overlap": 60,
+   "classic_exact_order": true,
+   "index_exact_order": true,
+   "ideal_len": 60,
+   "rank_ms_v8": 4.249548
+  },
+  {
+   "query": "a",
+   "filter": 4,
+   "matches": 7494,
+   "classic_overlap": 50,
+   "index_overlap": 60,
+   "classic_exact_order": false,
+   "index_exact_order": true,
+   "ideal_len": 60,
+   "rank_ms_v8": 3.840554
+  },
+  {
+   "query": "a",
+   "filter": 7,
+   "matches": 49384,
+   "classic_overlap": 2,
+   "index_overlap": 60,
+   "classic_exact_order": false,
+   "index_exact_order": true,
+   "ideal_len": 60,
+   "rank_ms_v8": 3.848234
+  },
+  {
+   "query": "main rs",
+   "filter": 0,
+   "matches": 3641,
+   "classic_overlap": 60,
+   "index_overlap": 60,
+   "classic_exact_order": true,
+   "index_exact_order": true,
+   "ideal_len": 60,
+   "rank_ms_v8": 5.736361
+  }
+ ],
+ "mismatches": []
+}
