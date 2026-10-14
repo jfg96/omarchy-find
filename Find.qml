@@ -39,9 +39,7 @@ Item {
   readonly property string indexSocketPath: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/lince/lince.sock"
   // No lince can run here: stop relaunching it until the next retry.
   property bool indexMissing: false
-  readonly property bool indexActive: root.searchEngine === "index" && indexSocket.connected && !root.indexStale
-  // Set when the daemon reports it may miss changes; fd is used from then on.
-  property bool indexStale: false
+  readonly property bool indexActive: root.searchEngine === "index" && indexSocket.connected
   property int indexPendingGen: -1
   // Generation whose index request failed and must be redone with fd.
   property int fdFallbackGen: -1
@@ -413,10 +411,10 @@ Item {
     if (!resp || resp.superseded || resp.id !== root.indexPendingGen || resp.id !== root.searchGen) return
     indexTimeout.stop()
     root.indexPendingGen = -1
-    if (resp.error || resp.fresh === false) {
-      // The index may be missing changes: redo this search, and the next
-      // ones, with fd.
-      root.indexStale = resp.fresh === false
+    // fresh:false is still answered from the index: lince polls the
+    // directories it could not watch, so their changes show up within
+    // seconds, while an fd walk of a home that size takes far longer.
+    if (resp.error) {
       root.redoWithFd()
       return
     }
@@ -935,7 +933,6 @@ Item {
     var engine = Backend.parseSearchConfig(text).engine
     if (engine === root.searchEngine && (engine !== "index" || indexDaemon.running || root.indexMissing)) return
     root.searchEngine = engine
-    root.indexStale = false
     root.indexMissing = false
     root.ensureIndexDaemon()
   }

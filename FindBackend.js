@@ -11,7 +11,7 @@ var EMPTY_QUERY_DAYS = 30
 // Search engines. "index" (default) asks lince (https://github.com/jfg96/lince),
 // a resident filename index that bin/lince-launcher fetches and verifies on
 // first use, over its Unix socket. Searches fall back to "fd" whenever lince
-// is unavailable, not connected, not fresh or not answering; "fd" always
+// is unavailable, not connected, failing or not answering; "fd" always
 // walks the disk with fd.
 var DEFAULT_ENGINE = "index"
 // Index answers take a few milliseconds and superseded requests are dropped
