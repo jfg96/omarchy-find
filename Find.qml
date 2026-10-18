@@ -47,6 +47,13 @@ Item {
   property int indexRestartDelay: 2000
   property bool searchConfigApplied: false
 
+  // Enter, Alt+Enter, Ctrl+C or Ctrl+T pressed while the typed query's
+  // search is still pending: "open", "folder", "copy", "terminal" or "".
+  property string pendingAction: ""
+  // Scene position of the last pointer event over a result row; null right
+  // after opening. See Backend.pointerMoved.
+  property var lastPointer: null
+
   readonly property bool isGoogleSearch: /^\s*go\s+/i.test(root.filterText)
   readonly property string googleSearchTerms: isGoogleSearch ? root.filterText.replace(/^\s*go\s+/i, "").trim() : ""
 
@@ -163,8 +170,26 @@ Item {
     var steps = root.displayLimitSteps
     var idx = steps.indexOf(root.displayLimit)
     var nextIdx = (idx + 1) % steps.length
+    var path = root.selectedPath()
     root.displayLimit = steps[nextIdx]
     root.presentResults(root.rawItems, root.mtimesLoaded)
+    root.reselectPath(path)
+  }
+
+  function selectedPath() {
+    return root.selectedIndex < displayModel.count ? displayModel.get(root.selectedIndex).path : ""
+  }
+
+  // Re-sorting keeps the same entry selected, not the same row number.
+  function reselectPath(path) {
+    if (!path) return
+    for (var i = 0; i < displayModel.count; i++) {
+      if (displayModel.get(i).path === path) {
+        root.selectedIndex = i
+        resultList.positionViewAtIndex(i, ListView.Contain)
+        return
+      }
+    }
   }
 
   function pluginId() {
@@ -178,6 +203,7 @@ Item {
       if (payload && typeof payload.query === "string") query = payload.query
     } catch (e) { /* fallback on invalid payload */ }
     root.opened = true
+    root.lastPointer = null
     root.activeFilter = 0
     root.manualExpand = false
     root.sortMenuOpen = false
@@ -186,6 +212,7 @@ Item {
   }
 
   function cancelProcs() {
+    root.pendingAction = ""
     debounce.stop()
     indexTimeout.stop()
     root.indexPendingGen = -1
@@ -264,6 +291,7 @@ Item {
   }
 
   function setFilter(nextFilter) {
+    root.pendingAction = ""
     root.filterText = nextFilter
     root.selectedIndex = 0
     if (nextFilter.trim() !== "") root.expanded = true
@@ -316,6 +344,7 @@ Item {
 
   function setActiveFilter(index) {
     if (index === root.activeFilter) return
+    root.pendingAction = ""
     root.activeFilter = index
     root.selectedIndex = 0
     // Never show results from the previous category under the newly selected
@@ -354,7 +383,12 @@ Item {
 
   function runSearch() {
     // Search only when expanded and not in Google search or AI mode.
-    if (!root.expanded || root.isGoogleSearch || root.isAiMode) return
+    if (!root.expanded || root.isGoogleSearch || root.isAiMode) {
+      // No search will answer a pending action, so it must not fire later
+      // on some other result list.
+      root.pendingAction = ""
+      return
+    }
     debounce.stop()
     root.searchGen++
     root.rerunPending = true
@@ -505,6 +539,31 @@ Item {
     if (root.selectedIndex < 0) root.selectedIndex = 0
     resultList.positionViewAtIndex(root.selectedIndex, ListView.Contain)
     if (!mtimesKnown) root.fetchMtimes()
+    root.flushPendingAction()
+  }
+
+  // While a search is pending the list still shows the previous query's
+  // results, so an action asked for then waits for the typed query's own.
+  function requestAction(kind) {
+    if (root.expanded && (debounce.running || root.searching)) {
+      root.pendingAction = kind
+      return
+    }
+    root.runAction(kind)
+  }
+
+  function flushPendingAction() {
+    if (!root.pendingAction || debounce.running || root.searching) return
+    var kind = root.pendingAction
+    root.pendingAction = ""
+    root.runAction(kind)
+  }
+
+  function runAction(kind) {
+    if (kind === "open") root.activateIndex(root.selectedIndex)
+    else if (kind === "folder") root.openEnclosingFolder(root.selectedIndex)
+    else if (kind === "copy") root.copyPathToClipboard(root.selectedIndex)
+    else if (kind === "terminal") root.openInTerminal(root.selectedIndex)
   }
 
   // Batch stat for mtimes across raw candidate items.
@@ -575,9 +634,11 @@ Item {
   }
 
   function setSortMode(mode) {
+    var path = root.selectedPath()
     root.sortMode = mode
     root.sortMenuOpen = false
     root.presentResults(root.rawItems, root.mtimesLoaded)
+    root.reselectPath(path)
   }
 
   function cycleSortMode() {
@@ -643,7 +704,7 @@ Item {
     var row = displayModel.get(index)
     root.dismiss()
     var target = row.isDir ? row.path : (row.path.slice(0, row.path.lastIndexOf("/")) || root.home)
-    Quickshell.execDetached(["bash", "-lc", "cd " + Util.shellQuote(target) + " && (xdg-terminal-exec || omarchy-default-terminal || $TERMINAL || kitty || foot || alacritty)"])
+    Quickshell.execDetached(Backend.terminalArgv(target))
   }
 
   // AI search mode ---------------------------------------------------------
@@ -1045,6 +1106,28 @@ Item {
     onExited: function(exitCode) { root.statProcExited(outStat.text || "") }
   }
 
+  // Ctrl+V appends the clipboard's text to the query.
+  function pasteClipboard() {
+    if (pasteProc.busy) return
+    pasteProc.busy = true
+    pasteProc.running = true
+  }
+
+  Process {
+    id: pasteProc
+    property bool busy: false
+    command: ["wl-paste", "--no-newline", "--type", "text"]
+    stdout: StdioCollector {
+      id: outPaste
+      waitForEnd: true
+    }
+    onExited: function(exitCode) {
+      pasteProc.busy = false
+      var text = exitCode === 0 ? Backend.pastedText(outPaste.text) : ""
+      if (text && root.opened) root.setFilter(root.filterText + text)
+    }
+  }
+
   // AI search mode — config, binary check, the two generation processes,
   // the display-drain timer, and terminal handoff. See ai/AiBackend.js for
   // the state machine these merely feed raw OS events into.
@@ -1377,10 +1460,14 @@ Item {
             }
             event.accepted = true
           } else if (event.modifiers & Qt.ControlModifier && event.key === Qt.Key_S) {
-            root.cycleSortMode()
+            // Sort and limit only apply to the file list.
+            if (!root.isAiMode && !root.isGoogleSearch) root.cycleSortMode()
             event.accepted = true
           } else if (event.modifiers & Qt.ControlModifier && event.key === Qt.Key_L) {
-            root.cycleDisplayLimit()
+            if (!root.isAiMode && !root.isGoogleSearch) root.cycleDisplayLimit()
+            event.accepted = true
+          } else if (event.modifiers & Qt.ControlModifier && event.key === Qt.Key_V) {
+            root.pasteClipboard()
             event.accepted = true
           } else if (event.key === Qt.Key_Backtab || (event.key === Qt.Key_Tab && (event.modifiers & Qt.ShiftModifier))) {
             if (root.switchPanel(-1)) {
@@ -1415,10 +1502,10 @@ Item {
             event.accepted = true
           } else if (event.modifiers & Qt.ControlModifier && event.key === Qt.Key_C) {
             if (root.isAiMode) root.aiCopyAnswer()
-            else root.copyPathToClipboard(root.selectedIndex)
+            else root.requestAction("copy")
             event.accepted = true
           } else if (event.modifiers & Qt.ControlModifier && event.key === Qt.Key_T) {
-            if (!root.isAiMode) root.openInTerminal(root.selectedIndex)
+            if (!root.isAiMode && !root.isGoogleSearch) root.requestAction("terminal")
             event.accepted = true
           } else if (event.key === Qt.Key_Up || (event.modifiers & Qt.ControlModifier && (event.key === Qt.Key_P || event.key === Qt.Key_K))) {
             if (root.isAiMode) {
@@ -1482,13 +1569,13 @@ Item {
                 if (aiState === "idle" || aiState === "error") root.aiSubmit()
                 else if (aiState === "ready") root.aiHandoff()
               }
-            } else if (event.modifiers & Qt.AltModifier) {
-              root.openEnclosingFolder(root.selectedIndex)
+            } else if ((event.modifiers & Qt.AltModifier) && !root.isGoogleSearch) {
+              root.requestAction("folder")
             } else {
-              root.activateIndex(root.selectedIndex)
+              root.requestAction("open")
             }
             event.accepted = true
-          } else if (event.text && event.text.length === 1 && event.text.charCodeAt(0) >= 32 && event.text.charCodeAt(0) !== 127 && (event.modifiers === Qt.NoModifier || event.modifiers === Qt.ShiftModifier)) {
+          } else if (Backend.isTypedText(event.text, event.modifiers, Qt.ShiftModifier | Qt.KeypadModifier)) {
             root.setFilter(root.filterText + event.text)
             event.accepted = true
           }
@@ -1951,7 +2038,12 @@ Item {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onContainsMouseChanged: if (containsMouse) root.selectedIndex = rowRoot.index
+                onPositionChanged: function(mouse) {
+                  var p = mapToItem(null, mouse.x, mouse.y)
+                  var moved = Backend.pointerMoved(root.lastPointer, p.x, p.y)
+                  root.lastPointer = { x: p.x, y: p.y }
+                  if (moved) root.selectedIndex = rowRoot.index
+                }
                 onClicked: {
                   root.selectedIndex = rowRoot.index
                   root.activateIndex(rowRoot.index)
