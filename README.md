@@ -125,7 +125,7 @@ omarchy restart shell
 
 Searches come from [lince](https://github.com/jfg96/lince), a resident filename index that answers in a few milliseconds. The first time the shell starts, `bin/lince-launcher` downloads the lince release pinned in `lince-release.env`, checks its exact size and SHA-256, and keeps it in `~/.local/share/omarchy-find/lince/`; nothing is written into the plugin checkout. lince then indexes your home (about 0.1 s on a warm cache) and follows changes through inotify, for ~40 MB of resident memory and no CPU while idle.
 
-Until lince is ready, or whenever it is unavailable (no network on first start, an unsupported CPU, a crash), searches walk the disk with `fd`, which Omarchy ships, so search always works. A developer build at `bin/lince` overrides the pinned release, and a lince already serving its socket (for example as a systemd user service) is used as is. To always use `fd`, create `~/.config/omarchy-find/search.json`:
+Until lince is ready, or whenever it is unavailable (no network on first start, an unsupported CPU, a crash, no `XDG_RUNTIME_DIR` for its socket), searches walk the disk with `fd`, which Omarchy ships, so search always works. A developer build at `bin/lince` overrides the pinned release, and a lince already serving its socket (for example as a systemd user service) is used as is. To always use `fd`, create `~/.config/omarchy-find/search.json`:
 
 ```json
 { "engine": "fd" }
@@ -229,6 +229,7 @@ This project is a work in progress — suggestions, bug reports, and improvement
 
 ```sh
 node tests/search_unit_test.js
+node tests/lince_lifecycle_test.js
 tests/search_helper_test.sh
 OMARCHY_FIND_ENGINE=index tests/search_helper_test.sh   # same checks against lince
 tests/lince_launcher_test.sh
