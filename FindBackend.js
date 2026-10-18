@@ -356,6 +356,31 @@ function parseSearchConfig(text) {
 // platform, broken metadata): not worth retrying soon.
 var LINCE_MISSING = 127
 
+// lince's own default socket. Without XDG_RUNTIME_DIR there is no private
+// directory to put it in (a fixed path under /tmp can be claimed first by
+// another user, who would then answer our searches), so the index stays off
+// and searches use fd.
+function indexSocketPath(runtimeDir) {
+  var dir = String(runtimeDir || "").replace(/\/+$/, "")
+  if (dir.charAt(0) !== "/") return ""
+  return dir + "/lince/lince.sock"
+}
+
+// The config watchdog reloads search.json every few seconds. Only its first
+// load and a real engine change may (re)start the engine; any other reload
+// would relaunch lince behind the restart backoff.
+function searchConfigChanges(applied, currentEngine, nextEngine) {
+  return !applied || currentEngine !== nextEngine
+}
+
+// Whether a dropped connection must schedule a lince relaunch. A lince that
+// exited at once because another daemon held the socket (a systemd user
+// service, or the previous shell's daemon during a reload) leaves nothing
+// behind to restart it when that daemon goes away.
+function indexRelaunchOnDisconnect(engine, daemonRunning, restartPending, missing) {
+  return engine === "index" && !daemonRunning && !restartPending && !missing
+}
+
 // Starts lince for $HOME through the launcher, unless one is already serving
 // the socket (lince exits at once then, e.g. when it runs as a systemd user
 // service). The base excludes are fixed at index time; category excludes

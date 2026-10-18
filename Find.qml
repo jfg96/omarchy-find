@@ -36,7 +36,8 @@ Item {
   property string searchEngine: Backend.DEFAULT_ENGINE
   readonly property string indexBinaryPath: decodeURIComponent(
     String(Qt.resolvedUrl("bin/lince-launcher")).replace(/^file:\/\//, ""))
-  readonly property string indexSocketPath: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/lince/lince.sock"
+  // Empty without XDG_RUNTIME_DIR: the index then stays off.
+  readonly property string indexSocketPath: Backend.indexSocketPath(Quickshell.env("XDG_RUNTIME_DIR"))
   // No lince can run here: stop relaunching it until the next retry.
   property bool indexMissing: false
   readonly property bool indexActive: root.searchEngine === "index" && indexSocket.connected
@@ -44,6 +45,7 @@ Item {
   // Generation whose index request failed and must be redone with fd.
   property int fdFallbackGen: -1
   property int indexRestartDelay: 2000
+  property bool searchConfigApplied: false
 
   readonly property bool isGoogleSearch: /^\s*go\s+/i.test(root.filterText)
   readonly property string googleSearchTerms: isGoogleSearch ? root.filterText.replace(/^\s*go\s+/i, "").trim() : ""
@@ -162,7 +164,7 @@ Item {
     var idx = steps.indexOf(root.displayLimit)
     var nextIdx = (idx + 1) % steps.length
     root.displayLimit = steps[nextIdx]
-    root.presentResults(root.rawItems)
+    root.presentResults(root.rawItems, root.mtimesLoaded)
   }
 
   function pluginId() {
@@ -444,7 +446,7 @@ Item {
       indexSocket.connected = false
       return
     }
-    if (!indexDaemon.running && !root.indexMissing) {
+    if (!indexDaemon.running && !root.indexMissing && root.indexSocketPath !== "") {
       indexDaemon.command = Backend.buildIndexDaemonArgv(root.indexBinaryPath, root.indexSocketPath, root.home)
       indexDaemon.running = true
     }
@@ -575,7 +577,7 @@ Item {
   function setSortMode(mode) {
     root.sortMode = mode
     root.sortMenuOpen = false
-    root.presentResults(root.rawItems)
+    root.presentResults(root.rawItems, root.mtimesLoaded)
   }
 
   function cycleSortMode() {
@@ -931,9 +933,14 @@ Item {
 
   function applySearchConfig(text) {
     var engine = Backend.parseSearchConfig(text).engine
-    if (engine === root.searchEngine && (engine !== "index" || indexDaemon.running || root.indexMissing)) return
+    // Relaunches after a crash or a failed download go through indexRestart,
+    // with its backoff, never through this periodic reload.
+    if (!Backend.searchConfigChanges(root.searchConfigApplied, root.searchEngine, engine)) return
+    root.searchConfigApplied = true
     root.searchEngine = engine
     root.indexMissing = false
+    root.indexRestartDelay = 2000
+    indexRestart.stop()
     root.ensureIndexDaemon()
   }
 
@@ -979,6 +986,8 @@ Item {
         root.indexRestartDelay = 2000
       } else {
         root.indexFallback()
+        if (Backend.indexRelaunchOnDisconnect(root.searchEngine, indexDaemon.running, indexRestart.running, root.indexMissing))
+          indexRestart.restart()
       }
     }
   }
@@ -988,7 +997,7 @@ Item {
   Timer {
     interval: 500
     repeat: true
-    running: root.searchEngine === "index" && !indexSocket.connected && !root.indexMissing
+    running: root.searchEngine === "index" && !indexSocket.connected && !root.indexMissing && root.indexSocketPath !== ""
     onTriggered: indexSocket.connected = true
   }
 
