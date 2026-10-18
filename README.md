@@ -171,6 +171,7 @@ You can summon Omarchy Find in four convenient ways:
 | `Ctrl+T` | Open terminal at selected item's directory |
 | `Ctrl+W` / `Ctrl+Backspace` | Delete previous word in search input |
 | `Ctrl+U` | Clear entire search query |
+| `Ctrl+V` | Paste clipboard text into the search query (`wl-paste`) |
 | `Esc` | Clear query if typed, or close overlay if query is empty |
 
 ---
@@ -230,6 +231,7 @@ This project is a work in progress — suggestions, bug reports, and improvement
 ```sh
 node tests/search_unit_test.js
 node tests/lince_lifecycle_test.js
+node tests/interaction_test.js
 tests/search_helper_test.sh
 OMARCHY_FIND_ENGINE=index tests/search_helper_test.sh   # same checks against lince
 tests/lince_launcher_test.sh

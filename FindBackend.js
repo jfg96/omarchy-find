@@ -416,6 +416,44 @@ function buildIndexRequest(query, filterIndex, id, home) {
   }
 }
 
+// Hover selects a row only when the pointer itself moved. Rows also slide
+// under a still pointer (new results, keyboard scrolling, the overlay opening
+// beneath it), and those must not steal the selection. `last` is the previous
+// scene position, or null right after opening.
+function pointerMoved(last, x, y) {
+  return !!last && (last.x !== x || last.y !== y)
+}
+
+// Whether a key press types its text into the query. Shift and the keypad
+// flag (digits on the numeric keypad) still type; Ctrl, Alt and Meta belong
+// to shortcuts. `ignoredModifiers` is Qt.ShiftModifier | Qt.KeypadModifier.
+function isTypedText(text, modifiers, ignoredModifiers) {
+  if (!text || text.length !== 1) return false
+  var code = text.charCodeAt(0)
+  if (code < 32 || code === 127) return false
+  return (modifiers & ~ignoredModifiers) === 0
+}
+
+// Clipboard text appended to the query: one line, without control characters.
+function pastedText(text) {
+  return String(text || "")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+}
+
+// Opens a terminal in `dir`. Runs the first terminal that exists and only
+// that one: chaining them with || would start the next one whenever the
+// first exits non-zero, e.g. after its last command failed.
+function terminalArgv(dir) {
+  return ["bash", "-lc",
+    'cd -- "$1" || exit\n' +
+    'for t in xdg-terminal-exec omarchy-default-terminal "$TERMINAL" kitty foot alacritty; do\n' +
+    '  [ -n "$t" ] && command -v "${t%% *}" >/dev/null 2>&1 && exec $t\n' +
+    'done\n' +
+    'exit 127',
+    "omarchy-find", dir]
+}
+
 function basename(path) {
   var idx = path.lastIndexOf("/")
   return idx === -1 ? path : path.slice(idx + 1)
