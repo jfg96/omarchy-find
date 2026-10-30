@@ -8,6 +8,71 @@ PLUGIN_ID="oma.find"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+BINDINGS_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/hypr/bindings.lua"
+# The shortcut lives between these markers, so it can be replaced or removed
+# without touching anything else in bindings.lua.
+KEYBIND_BEGIN="-- >>> oma.find shortcut (managed by omarchy-find, edits are replaced)"
+KEYBIND_END="-- <<< oma.find shortcut"
+
+# Prints bindings.lua without the managed block, nor the two lines earlier
+# versions appended: their comment and their o.bind, matched exactly. Fails
+# on a begin marker with no end, which would otherwise drop the rest of the file.
+strip_bindings() {
+  awk -v begin="$KEYBIND_BEGIN" -v end="$KEYBIND_END" '
+    $0 == begin { inside = 1; next }
+    inside && $0 == end { inside = 0; next }
+    inside { next }
+    $0 == "-- Omarchy Find file search overlay" { next }
+    /^o\.bind\("[A-Za-z0-9 _+]+", "Find files & folders", "(omarchy-find|omarchy-shell shell toggle (oma\.find|jesseburlamaque\.omarchy-find))"\)$/ { next }
+    { print }
+    END { if (inside) exit 3 }
+  ' "$1"
+}
+
+# Rewrites bindings.lua without our shortcut, then appends $1 when given.
+# Writes through a symlink to its target, keeps a backup of the file as it was
+# before the first change, and replaces it in one rename. Returns 1 when the
+# file would come out the same, and then writes nothing.
+write_bindings() {
+  local block="$1" target tmp kept status=0
+  target=$(realpath -- "$BINDINGS_FILE")
+  tmp=$(mktemp "$target.XXXXXX")
+  strip_bindings "$target" > "$tmp" || status=$?
+  if (( status != 0 )); then
+    rm -f -- "$tmp"
+    echo "omarchy-find: $BINDINGS_FILE has '$KEYBIND_BEGIN' without '$KEYBIND_END'; fix it by hand." >&2
+    exit 1
+  fi
+  if [ -z "$block" ] && cmp -s -- "$tmp" "$target"; then
+    rm -f -- "$tmp"
+    return 1
+  fi
+  # $(...) drops trailing newlines, so the blank lines left where the shortcut
+  # was do not pile up at the end of the file.
+  kept=$(cat -- "$tmp")
+  {
+    [ -z "$kept" ] || printf '%s\n' "$kept"
+    if [ -n "$block" ]; then
+      [ -z "$kept" ] || printf '\n'
+      printf '%s\n' "$block"
+    fi
+  } > "$tmp"
+  if cmp -s -- "$tmp" "$target"; then
+    rm -f -- "$tmp"
+    return 1
+  fi
+  [ -e "$target.omarchy-find.bak" ] || cp -p -- "$target" "$target.omarchy-find.bak"
+  chmod --reference="$target" -- "$tmp"
+  mv -- "$tmp" "$target"
+}
+
+reload_hyprland() {
+  if command -v hyprctl >/dev/null 2>&1; then
+    hyprctl reload >/dev/null 2>&1 || true
+    echo "✓ Hyprland configuration reloaded."
+  fi
+}
+
 install_cli_and_desktop() {
   mkdir -p "$HOME/.local/bin"
   if [ -f "$SCRIPT_DIR/omarchy-find" ]; then
@@ -45,14 +110,12 @@ case "$verb" in
     KEYBIND="${payload:-ALT + SPACE}"
     [ "$KEYBIND" = "{}" ] && KEYBIND="ALT + SPACE"
     if ! echo "$KEYBIND" | grep -qE '^[A-Za-z0-9 _+]+$'; then
-      echo "omarchy-find: keybind inválido '$KEYBIND'. Use formato como 'ALT + SPACE' ou 'SUPER + F'." >&2
+      echo "omarchy-find: invalid keybind '$KEYBIND'. Use a form like 'ALT + SPACE' or 'SUPER + F'." >&2
       exit 1
     fi
-    BINDINGS_DIR="$HOME/.config/hypr"
-    BINDINGS_FILE="$BINDINGS_DIR/bindings.lua"
 
-    mkdir -p "$BINDINGS_DIR"
-    if [ ! -f "$BINDINGS_FILE" ]; then
+    mkdir -p "$(dirname "$BINDINGS_FILE")"
+    if [ ! -e "$BINDINGS_FILE" ]; then
       if [ -f "/usr/share/omarchy/config/hypr/bindings.lua" ]; then
         cp "/usr/share/omarchy/config/hypr/bindings.lua" "$BINDINGS_FILE"
       else
@@ -62,39 +125,24 @@ EOF
       fi
     fi
 
-    # Remove previous omarchy-find bindings if present
-    if grep -E -q "omarchy-find|jesseburlamaque\.omarchy-find|oma\.find" "$BINDINGS_FILE"; then
-      sed -i '/Omarchy Find/d' "$BINDINGS_FILE"
-      sed -i '/omarchy-find/d' "$BINDINGS_FILE"
-      sed -i '/jesseburlamaque\.omarchy-find/d; /shell toggle oma\.find/d' "$BINDINGS_FILE"
-    fi
-
-    cat <<EOF >> "$BINDINGS_FILE"
-
--- Omarchy Find file search overlay
-o.bind("$KEYBIND", "Find files & folders", "omarchy-shell shell toggle $PLUGIN_ID")
-EOF
-
-    echo "✓ CLI instalado em $HOME/.local/bin/omarchy-find"
-    echo "✓ Atalho global '$KEYBIND' configurado em $BINDINGS_FILE"
-    if command -v hyprctl >/dev/null 2>&1; then
-      hyprctl reload >/dev/null 2>&1 || true
-      echo "✓ Configuração do Hyprland recarregada."
-    fi
+    block="$KEYBIND_BEGIN
+o.bind(\"$KEYBIND\", \"Find files & folders\", \"omarchy-shell shell toggle $PLUGIN_ID\")
+$KEYBIND_END"
+    write_bindings "$block" || true
+    echo "✓ CLI installed at $HOME/.local/bin/omarchy-find"
+    echo "✓ Global shortcut '$KEYBIND' set in $BINDINGS_FILE"
+    reload_hyprland
     ;;
   remove-keybind | uninstall-keybind)
-    BINDINGS_FILE="$HOME/.config/hypr/bindings.lua"
-    if [ -f "$BINDINGS_FILE" ]; then
-      sed -i '/Omarchy Find/d' "$BINDINGS_FILE"
-      sed -i '/omarchy-find/d' "$BINDINGS_FILE"
-      sed -i '/jesseburlamaque\.omarchy-find/d; /shell toggle oma\.find/d' "$BINDINGS_FILE"
-      echo "✓ Atalho do Omarchy Find removido de $BINDINGS_FILE"
-      if command -v hyprctl >/dev/null 2>&1; then
-        hyprctl reload >/dev/null 2>&1 || true
-        echo "✓ Configuração do Hyprland recarregada."
-      fi
+    if [ ! -e "$BINDINGS_FILE" ]; then
+      echo "No $BINDINGS_FILE found."
+      exit 0
+    fi
+    if write_bindings ""; then
+      echo "✓ Omarchy Find shortcut removed from $BINDINGS_FILE"
+      reload_hyprland
     else
-      echo "Nenhum arquivo $BINDINGS_FILE encontrado."
+      echo "No Omarchy Find shortcut in $BINDINGS_FILE."
     fi
     ;;
   -h | --help | help)

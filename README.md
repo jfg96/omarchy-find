@@ -218,7 +218,7 @@ omarchy restart shell
 omarchy-find remove-keybind
 rm -f ~/.local/bin/omarchy-find ~/.local/share/applications/omarchy-find.desktop
 ```
-*(Or manually delete the `omarchy-find` line from `~/.config/hypr/bindings.lua`)*
+*(Or delete the block between the `oma.find shortcut` markers in `~/.config/hypr/bindings.lua`. The first change keeps a copy of the file as `bindings.lua.omarchy-find.bak`.)*
 
 ---
 
@@ -235,6 +235,7 @@ node tests/interaction_test.js
 tests/search_helper_test.sh
 OMARCHY_FIND_ENGINE=index tests/search_helper_test.sh   # same checks against lince
 tests/lince_launcher_test.sh
+tests/keybind_test.sh
 node tests/ai_unit_test.js
 ```
 

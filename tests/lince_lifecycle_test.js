@@ -131,7 +131,7 @@ function makeShell(env) {
   shell.root.applySearchConfig(null)
   assert(shell.launches === 0, "lince is not started without a private socket directory")
   const ok = makeShell({ XDG_RUNTIME_DIR: "/run/user/1000/" })
-  assert(ok.root.indexSocketPath === "/run/user/1000/lince/lince.sock", "lince's default socket under XDG_RUNTIME_DIR")
+  assert(ok.root.indexSocketPath === "/run/user/1000/oma-find/lince.sock", "a socket of our own under XDG_RUNTIME_DIR, not lince's default")
   assert(makeShell({ XDG_RUNTIME_DIR: "relative" }).root.indexSocketPath === "", "a relative XDG_RUNTIME_DIR is ignored")
 }
 
