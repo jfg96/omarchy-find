@@ -405,6 +405,14 @@ function indexRelaunchOnDisconnect(engine, daemonRunning, restartPending, missin
   return engine === "index" && !daemonRunning && !restartPending && !missing
 }
 
+// The last `max` lines of a daemon's stderr, with `line` appended. Kept quiet
+// while it runs, so the shell log only carries them when it fails.
+function logTail(lines, line, max) {
+  var limit = max || 20
+  var next = (lines || []).concat([String(line)])
+  return next.length > limit ? next.slice(next.length - limit) : next
+}
+
 // Starts lince for $HOME through the launcher, unless one is already serving
 // the socket (lince exits at once then, e.g. when it runs as a systemd user
 // service). The base excludes are fixed at index time; category excludes

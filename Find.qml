@@ -51,6 +51,8 @@ Item {
   // Generation whose index request failed and must be redone with fd.
   property int fdFallbackGen: -1
   property int indexRestartDelay: 2000
+  // lince's last stderr lines, shown in the shell log only if it fails.
+  property var indexDaemonLog: []
   property bool searchConfigApplied: false
 
   // Enter, Alt+Enter, Ctrl+C or Ctrl+T pressed while the typed query's
@@ -168,6 +170,9 @@ Item {
   property string sortMode: "relevance"
   property bool sortMenuOpen: false
   property var rawItems: []
+  // Dates already known for paths, kept for one opening of the overlay: a
+  // shell that keeps the plugin loaded for days would otherwise hold every
+  // path it was ever shown.
   property var mtimesMap: ({})
   property int displayLimit: 60
   readonly property var displayLimitSteps: [15, 30, 60, 100, 200]
@@ -209,6 +214,7 @@ Item {
       if (payload && typeof payload.query === "string") query = payload.query
     } catch (e) { /* fallback on invalid payload */ }
     root.opened = true
+    root.mtimesMap = ({})
     root.lastPointer = null
     root.activeFilter = 0
     root.manualExpand = false
@@ -1042,10 +1048,13 @@ Item {
     // The daemon exits when this pipe closes, i.e. when the shell goes away.
     stdinEnabled: true
     stderr: SplitParser {
-      onRead: function(line) { console.log(line) }
+      onRead: function(line) { root.indexDaemonLog = Backend.logTail(root.indexDaemonLog, line) }
     }
     // Exit 0 with a live socket means another instance already serves it.
     onExited: function(exitCode) {
+      if (exitCode !== 0 && root.indexDaemonLog.length > 0)
+        console.warn("[omarchy-find/lince] exited " + exitCode + ":\n" + root.indexDaemonLog.join("\n"))
+      root.indexDaemonLog = []
       if (exitCode === Backend.LINCE_MISSING) {
         // Nothing to retry soon; look again in five minutes.
         root.indexMissing = true
