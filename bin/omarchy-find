@@ -5,7 +5,8 @@
 set -euo pipefail
 
 PLUGIN_ID="oma.find"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolved through the ~/.local/bin link install-cli makes, to the plugin.
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 BINDINGS_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/hypr/bindings.lua"
@@ -75,8 +76,10 @@ reload_hyprland() {
 
 install_cli_and_desktop() {
   mkdir -p "$HOME/.local/bin"
+  # A link, not a copy, so the command follows the plugin's updates. It
+  # replaces the copy earlier versions installed.
   if [ -f "$SCRIPT_DIR/omarchy-find" ]; then
-    install -m 755 "$SCRIPT_DIR/omarchy-find" "$HOME/.local/bin/omarchy-find"
+    ln -sfn -- "$SCRIPT_DIR/omarchy-find" "$HOME/.local/bin/omarchy-find"
   fi
 
   if [ -f "$ROOT_DIR/share/omarchy-find.desktop" ]; then
@@ -102,8 +105,8 @@ case "$verb" in
     ;;
   install-cli)
     install_cli_and_desktop
-    echo "✓ CLI omarchy-find instalado em $HOME/.local/bin/omarchy-find"
-    echo "✓ Atalho de aplicativo registrado em $HOME/.local/share/applications/omarchy-find.desktop"
+    echo "✓ omarchy-find linked at $HOME/.local/bin/omarchy-find"
+    echo "✓ Launcher entry installed at $HOME/.local/share/applications/omarchy-find.desktop"
     ;;
   setup-keybind | install-keybind)
     install_cli_and_desktop
@@ -129,7 +132,7 @@ EOF
 o.bind(\"$KEYBIND\", \"Find files & folders\", \"omarchy-shell shell toggle $PLUGIN_ID\")
 $KEYBIND_END"
     write_bindings "$block" || true
-    echo "✓ CLI installed at $HOME/.local/bin/omarchy-find"
+    echo "✓ omarchy-find linked at $HOME/.local/bin/omarchy-find"
     echo "✓ Global shortcut '$KEYBIND' set in $BINDINGS_FILE"
     reload_hyprland
     ;;
