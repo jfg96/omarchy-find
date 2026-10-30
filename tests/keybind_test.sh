@@ -1,7 +1,7 @@
 #!/bin/bash
 # bin/omarchy-find setup-keybind / remove-keybind against a sandboxed
 # bindings.lua: only the managed block and the lines earlier versions wrote
-# are ever touched.
+# are ever touched. Also install-cli, in a sandboxed home.
 set -uo pipefail
 
 source_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -117,6 +117,19 @@ printf '%s\n' "$user_lines" > "$bindings"
 chmod 600 "$bindings"
 check run setup-keybind
 check [ "$(stat -c %a "$bindings")" = 600 ]
+
+# install-cli links the plugin's script, replacing a copy left by earlier
+# versions, and the link run again still points at the plugin.
+setup
+mkdir -p "$sandbox/home/.local/bin"
+printf '#!/bin/sh\necho stale copy\n' > "$sandbox/home/.local/bin/omarchy-find"
+check run install-cli
+link="$sandbox/home/.local/bin/omarchy-find"
+check [ -L "$link" ]
+check [ "$(readlink -f "$link")" = "$(readlink -f "$source_dir/bin/omarchy-find")" ]
+check env HOME="$sandbox/home" PATH="$sandbox/stubs:$PATH" "$link" install-cli >/dev/null
+check [ "$(readlink -f "$link")" = "$(readlink -f "$source_dir/bin/omarchy-find")" ]
+check [ -f "$sandbox/home/.local/share/applications/omarchy-find.desktop" ]
 
 echo "$passed keybind tests passed, $failed failed"
 (( failed == 0 ))

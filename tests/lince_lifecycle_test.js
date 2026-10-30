@@ -38,8 +38,10 @@ function property(name) {
 }
 
 function makeShell(env) {
+  const warnings = []
   const ctx = {
-    console,
+    console: { log: console.log, warn: (text) => warnings.push(text) },
+    warnings,
     Quickshell: { env: (name) => env[name] },
     launches: 0,
   }
@@ -48,14 +50,19 @@ function makeShell(env) {
     "; return { DEFAULT_ENGINE: DEFAULT_ENGINE, LINCE_MISSING: LINCE_MISSING, parseSearchConfig: parseSearchConfig," +
     " buildIndexDaemonArgv: buildIndexDaemonArgv, indexSocketPath: typeof indexSocketPath === 'function' ? indexSocketPath : undefined," +
     " searchConfigChanges: typeof searchConfigChanges === 'function' ? searchConfigChanges : undefined," +
-    " indexRelaunchOnDisconnect: typeof indexRelaunchOnDisconnect === 'function' ? indexRelaunchOnDisconnect : undefined } })()", ctx)
+    " indexRelaunchOnDisconnect: typeof indexRelaunchOnDisconnect === 'function' ? indexRelaunchOnDisconnect : undefined," +
+    " indexPrivateSocketPath: indexPrivateSocketPath, INDEX_STATUS_REQUEST: INDEX_STATUS_REQUEST, indexServesHome: indexServesHome," +
+    " logTail: logTail } })()", ctx)
   vm.runInContext(`
     var indexDaemon = {
       _running: false, command: [],
       get running() { return this._running },
       set running(v) { if (v && !this._running) launches++; this._running = v }
     }
-    var indexSocket = { connected: false }
+    var indexSocket = {
+      connected: false, sent: [],
+      write: function(text) { this.sent.push(text) }, flush: function() {}
+    }
     var indexRestart = { running: false, restart: function() { this.running = true }, stop: function() { this.running = false } }
     var root = {
       home: "/home/test",
@@ -64,13 +71,20 @@ function makeShell(env) {
       searchConfigApplied: false,
       indexMissing: false,
       indexRestartDelay: 2000,
+      indexDaemonLog: [],
+      daemonLogged: function(line) {` + block("onRead: function(line) { root.indexDaemonLog") + `},
       indexFallback: function() {},
+      indexVerified: false,
+      indexConnected: function() {` + block("function indexConnected()") + `},
+      indexStatusAnswered: function(resp) {` + block("function indexStatusAnswered(resp)") + `},
+      indexResponse: function(line) {` + block("function indexResponse(line)") + `},
       ensureIndexDaemon: function() {` + block("function ensureIndexDaemon()") + `},
       applySearchConfig: function(text) {` + block("function applySearchConfig(text)") + `},
       disconnected: function() { var connected = false;` + block("onConnectionStateChanged:") + `},
-      daemonExited: function(exitCode) {` + block("onExited: function(exitCode) {\n      if (exitCode === Backend.LINCE_MISSING)") + `}
+      daemonExited: function(exitCode) {` + block("onExited: function(exitCode) {\n      if (exitCode !== 0 && root.indexDaemonLog") + `}
     }
     root.indexSocketPath = ` + property("indexSocketPath") + `
+    root.indexPrivateSocketPath = ` + property("indexPrivateSocketPath") + `
   `, ctx)
   return ctx
 }
@@ -131,9 +145,68 @@ function makeShell(env) {
   shell.root.applySearchConfig(null)
   assert(shell.launches === 0, "lince is not started without a private socket directory")
   const ok = makeShell({ XDG_RUNTIME_DIR: "/run/user/1000/" })
-  assert(ok.root.indexSocketPath === "/run/user/1000/oma-find/lince.sock", "a socket of our own under XDG_RUNTIME_DIR, not lince's default")
+  assert(ok.root.indexSocketPath === "/run/user/1000/lince/lince.sock", "lince's default socket under XDG_RUNTIME_DIR first")
+  assert(ok.root.indexPrivateSocketPath === "/run/user/1000/oma-find/lince.sock", "and a socket of our own beside it")
   assert(makeShell({ XDG_RUNTIME_DIR: "relative" }).root.indexSocketPath === "", "a relative XDG_RUNTIME_DIR is ignored")
 }
+
+// A daemon on lince's default socket is asked what it indexes before any
+// search goes to it. One that indexes $HOME (ours, or a systemd user
+// service) is used as is.
+{
+  const shell = makeShell({ XDG_RUNTIME_DIR: "/run/user/1000" })
+  shell.indexSocket.connected = true
+  shell.root.indexConnected()
+  assert(!shell.root.indexVerified, "a daemon on the default socket is not trusted before it answers")
+  assert(shell.indexSocket.sent.length === 1 && JSON.parse(shell.indexSocket.sent[0]).op === "status", "it is asked its status")
+  shell.root.indexResponse(JSON.stringify({ v: 1, roots: ["/mnt/data", "/home/test/"] }))
+  assert(shell.root.indexVerified, "a daemon that indexes $HOME is used")
+  assert(shell.root.indexSocketPath === "/run/user/1000/lince/lince.sock", "on the shared socket")
+  assert(shell.warnings.length === 0, "without a word in the log")
+}
+
+// One over other roots, of another protocol version, or that cannot answer,
+// is left alone, and ours starts on our own socket, trusted at once.
+for (const answer of [
+  JSON.stringify({ v: 1, roots: ["/mnt/data"] }),
+  JSON.stringify({ v: 2, roots: ["/home/test"] }),
+  JSON.stringify({ v: 1, error: "unknown op" }),
+  "not json",
+]) {
+  const shell = makeShell({ XDG_RUNTIME_DIR: "/run/user/1000" })
+  shell.root.applySearchConfig(null)
+  shell.indexDaemon.running = false // it found the socket served and exited 0
+  shell.indexSocket.connected = true
+  shell.root.indexConnected()
+  shell.root.indexResponse(answer)
+  assert(!shell.root.indexVerified && !shell.indexSocket.connected, "the foreign daemon is dropped: " + answer)
+  assert(shell.root.indexSocketPath === "/run/user/1000/oma-find/lince.sock", "for our own socket: " + answer)
+  assert(shell.indexDaemon.running && shell.indexDaemon.command.indexOf("/run/user/1000/oma-find/lince.sock") > 0, "where ours starts: " + answer)
+  assert(shell.warnings.length === 1, "saying so once: " + answer)
+  shell.indexSocket.connected = true
+  shell.indexSocket.sent = []
+  shell.root.indexConnected()
+  assert(shell.root.indexVerified && shell.indexSocket.sent.length === 0, "our own socket needs no status: " + answer)
+}
+
+// lince's stderr stays out of the shell log while it runs, and its last lines
+// reach it when it fails.
+{
+  const shell = makeShell({ XDG_RUNTIME_DIR: "/run/user/1000" })
+  for (let i = 1; i <= 25; i++) shell.root.daemonLogged("lince: line " + i)
+  assert(shell.warnings.length === 0, "a running lince logs nothing")
+  assert(shell.root.indexDaemonLog.length === 20, "only the last 20 lines are kept")
+  shell.root.daemonExited(1)
+  assert(shell.warnings.length === 1 && /exited 1/.test(shell.warnings[0]), "a failed lince is reported once")
+  assert(/line 25$/.test(shell.warnings[0]) && !/line 5\n/.test(shell.warnings[0]), "with its last lines")
+  assert(shell.root.indexDaemonLog.length === 0, "the kept lines go with the exit")
+  shell.root.daemonLogged("lince: already running on /run/user/1000/lince/lince.sock")
+  shell.root.daemonExited(0)
+  assert(shell.warnings.length === 1, "a lince that found another one serving logs nothing")
+}
+
+// Each opening starts with no remembered dates, so they do not pile up.
+assert(/root\.opened = true\n\s*root\.mtimesMap = \(\{\}\)/.test(qml), "open() clears the mtime cache")
 
 // Re-sorting or changing the display limit reuses the mtimes it already has.
 assert(!/presentResults\(root\.rawItems\)/.test(qml), "sort and limit changes pass the known mtimes")

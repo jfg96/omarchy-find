@@ -356,17 +356,38 @@ function parseSearchConfig(text) {
 // platform, broken metadata): not worth retrying soon.
 var LINCE_MISSING = 127
 
-// A socket of our own, not lince's default: a lince started by hand sits on
-// the default one, maybe over other roots, and lince exits 0 when its socket
-// already answers, so that daemon would be taken as ours and every search
-// would fail over to fd. Without XDG_RUNTIME_DIR there is no private
-// directory to put it in (a fixed path under /tmp can be claimed first by
-// another user, who would then answer our searches), so the index stays off
-// and searches use fd.
+// lince's own default socket, so one index serves both this plugin and a
+// lince run as a systemd user service. Without XDG_RUNTIME_DIR there is no
+// private directory to put it in (a fixed path under /tmp can be claimed
+// first by another user, who would then answer our searches), so the index
+// stays off and searches use fd.
 function indexSocketPath(runtimeDir) {
   var dir = String(runtimeDir || "").replace(/\/+$/, "")
   if (dir.charAt(0) !== "/") return ""
+  return dir + "/lince/lince.sock"
+}
+
+// A socket of our own, for when the daemon on the default one does not index
+// $HOME: a lince started by hand over other roots would otherwise answer
+// every search with "root not indexed", and each would fall back to fd.
+function indexPrivateSocketPath(runtimeDir) {
+  var dir = String(runtimeDir || "").replace(/\/+$/, "")
+  if (dir.charAt(0) !== "/") return ""
   return dir + "/oma-find/lince.sock"
+}
+
+// Asked of a daemon this plugin did not start, before any search goes to it.
+var INDEX_STATUS_REQUEST = { op: "status" }
+
+// Whether a status answer (parsed JSON) comes from a lince that speaks our
+// protocol version and indexes `home`, the root every search asks for.
+function indexServesHome(resp, home) {
+  if (!resp || resp.v !== 1 || resp.error || !Array.isArray(resp.roots)) return false
+  var want = String(home || "").replace(/\/+$/, "")
+  for (var i = 0; i < resp.roots.length; i++) {
+    if (String(resp.roots[i]).replace(/\/+$/, "") === want) return true
+  }
+  return false
 }
 
 // The config watchdog reloads search.json every few seconds. Only its first
@@ -382,6 +403,14 @@ function searchConfigChanges(applied, currentEngine, nextEngine) {
 // behind to restart it when that daemon goes away.
 function indexRelaunchOnDisconnect(engine, daemonRunning, restartPending, missing) {
   return engine === "index" && !daemonRunning && !restartPending && !missing
+}
+
+// The last `max` lines of a daemon's stderr, with `line` appended. Kept quiet
+// while it runs, so the shell log only carries them when it fails.
+function logTail(lines, line, max) {
+  var limit = max || 20
+  var next = (lines || []).concat([String(line)])
+  return next.length > limit ? next.slice(next.length - limit) : next
 }
 
 // Starts lince for $HOME through the launcher, unless one is already serving
