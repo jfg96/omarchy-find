@@ -356,14 +356,17 @@ function parseSearchConfig(text) {
 // platform, broken metadata): not worth retrying soon.
 var LINCE_MISSING = 127
 
-// lince's own default socket. Without XDG_RUNTIME_DIR there is no private
+// A socket of our own, not lince's default: a lince started by hand sits on
+// the default one, maybe over other roots, and lince exits 0 when its socket
+// already answers, so that daemon would be taken as ours and every search
+// would fail over to fd. Without XDG_RUNTIME_DIR there is no private
 // directory to put it in (a fixed path under /tmp can be claimed first by
 // another user, who would then answer our searches), so the index stays off
 // and searches use fd.
 function indexSocketPath(runtimeDir) {
   var dir = String(runtimeDir || "").replace(/\/+$/, "")
   if (dir.charAt(0) !== "/") return ""
-  return dir + "/lince/lince.sock"
+  return dir + "/oma-find/lince.sock"
 }
 
 // The config watchdog reloads search.json every few seconds. Only its first
