@@ -28,6 +28,7 @@ if [[ ${OMARCHY_FIND_ENGINE:-} == index ]]; then
     printf '%s\n' '#!/bin/bash' 'args=()' 'while (( $# )); do' '  case $1 in' \
       '    --home) args+=(--root "$2"); shift ;;' \
       '    --system-folders) args+=(--scope .config --scope .local/share --max-depth 3) ;;' \
+      '    --query=*) args+=(--query "${1#--query=}") ;;' \
       '    *) args+=("$1") ;;' '  esac' '  shift' 'done'
     printf 'exec %q oneshot "${args[@]}"\n' "$lince_bin"
   } > "$helper"
