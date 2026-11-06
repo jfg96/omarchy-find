@@ -787,9 +787,11 @@ Item {
   // free, instead of us racing a new command onto it here.
   function ensureAiBinaryChecked() {
     var disp = AiBackend.agentDisplay()
+    // No adapter: there is no binary to look for, and Enter must go through
+    // to AiBackend, which reports it without running anything.
     if (!disp.supported) {
       root.aiBinaryChecked = true
-      root.aiBinaryMissing = true
+      root.aiBinaryMissing = false
       return
     }
     root.aiBinaryCheckedFor = disp.binary
@@ -890,6 +892,26 @@ Item {
     AiBackend.cancel()
   }
 
+  // Stops one run, whichever slot holds it, for a limit or a timeout. By
+  // generation, so a stop that lands late cannot take a newer run with it.
+  function aiStopGeneration(gen) {
+    if (root.aiPendingSpawn && root.aiPendingSpawn.generation === gen) root.aiPendingSpawn = null
+    if (aiProcA.gen === gen) root.aiKillProcessIfRunning(aiProcA, aiKillFallbackTimerA)
+    if (aiProcB.gen === gen) root.aiKillProcessIfRunning(aiProcB, aiKillFallbackTimerB)
+  }
+
+  // Deferred, so a process is never stopped from inside its own output
+  // callback (see aiFreeProc).
+  function aiShowSnapshot(snap) {
+    root.aiSession = snap
+    if (snap.shouldStop) Qt.callLater(root.aiStopGeneration, snap.generation)
+  }
+
+  function aiOpenLink(link) {
+    if (AiBackend.isOpenableLink(link)) Qt.openUrlExternally(link)
+    else console.warn("[omarchy-find/ai] refused to open a link that is not https")
+  }
+
   function aiSubmit() {
     if (!root.isAiMode || root.aiBinaryMissing) return
     var prompt = root.aiPromptText.trim()
@@ -904,7 +926,7 @@ Item {
 
   function onAiLine(gen, line) {
     var snap = AiBackend.handleLine(gen, line)
-    if (snap) root.aiSession = snap
+    if (snap) root.aiShowSnapshot(snap)
   }
 
   function onAiStderr(gen, line) {
@@ -1362,6 +1384,19 @@ Item {
     onTriggered: {
       var snap = AiBackend.tick()
       if (snap) root.aiSession = snap
+    }
+  }
+
+  // Stops an agent that has gone quiet, which would otherwise stay "thinking"
+  // until the user presses Esc.
+  Timer {
+    id: aiIdleWatchdog
+    interval: 1000
+    repeat: true
+    running: !!(root.aiSession && (root.aiSession.state === "starting" || root.aiSession.state === "running"))
+    onTriggered: {
+      var snap = AiBackend.checkIdle(Date.now())
+      if (snap) root.aiShowSnapshot(snap)
     }
   }
 
@@ -1958,22 +1993,9 @@ Item {
               Text {
                 id: aiAnswerText
                 width: aiAnswerFlick.width
-                text: {
-                  var s = root.aiSession
-                  if (!s) return ""
-                  if (s.state !== "error") return s.displayedText
-                  // A mid-stream failure must not hide whatever the agent
-                  // already said (setError() flushes pendingText into
-                  // displayedText for exactly this) — show the retained
-                  // partial answer with a clearly separated error line
-                  // beneath it, not the error message alone.
-                  var msg = s.errorMessage || ""
-                  return s.displayedText && s.displayedText.length > 0
-                    ? s.displayedText + "\n\n⚠ " + msg
-                    : msg
-                }
+                text: AiBackend.answerMarkdown(root.aiSession)
                 textFormat: Text.MarkdownText
-                onLinkActivated: function(link) { Qt.openUrlExternally(link) }
+                onLinkActivated: function(link) { root.aiOpenLink(link) }
                 wrapMode: Text.Wrap
                 // Only redden the whole block when there's nothing but the
                 // error to show — a retained partial answer should read as

@@ -29,7 +29,9 @@ var DEFAULT_CONFIG = {
   drainBaseCps: 60,
   rampDoubleMs: 500,
   maxCps: 2400,
-  streamFlushMs: 16
+  streamFlushMs: 16,
+  // An agent silent for this long is stopped; see AiBackend.checkIdle().
+  idleTimeoutSec: 300
 }
 
 function defaults() {
@@ -81,9 +83,22 @@ function coerceField(key, value) {
       if (isFinite(ms) && ms >= 8 && ms <= 1000) return Math.round(ms)
       return undefined
     }
+    case "idleTimeoutSec": {
+      var sec = Number(value)
+      if (isFinite(sec) && sec >= 30 && sec <= 3600) return Math.round(sec)
+      return undefined
+    }
     default:
       return undefined
   }
+}
+
+// The first line of ~/.config/omarchy/defaults/agent. Kept even when no
+// adapter exists for it: AiBackend then reports that instead of running. It
+// must never become the default agent, which would send the prompt to a
+// provider the user did not pick.
+function omarchyDefaultAgent(omarchyAgent) {
+  return String(omarchyAgent || "").split("\n")[0].trim().toLowerCase().slice(0, 64)
 }
 
 // Merge raw ai.json text (or null/undefined/empty when absent) onto the
@@ -102,13 +117,9 @@ function mergeConfig(rawText, omarchyAgent) {
   var agentSetInJson = false
 
   if (trimmed.length === 0) {
-    // No ai.json — use Omarchy default agent if available and supported.
-    var oa = String(omarchyAgent || "").split("\n")[0].trim().toLowerCase()
-    if (oa && SUPPORTED_AGENTS.indexOf(oa) !== -1) {
-      config.agent = oa
-    }
-    // If oa is set but not in SUPPORTED_AGENTS, AiBackend will show a clear
-    // "does not yet support headless AI mode" message — no warning needed here.
+    // No ai.json — use the Omarchy default agent if there is one.
+    var oa = omarchyDefaultAgent(omarchyAgent)
+    if (oa) config.agent = oa
     return { config: config, warning: null }
   }
 
@@ -141,10 +152,8 @@ function mergeConfig(rawText, omarchyAgent) {
   // If ai.json exists but doesn't specify an agent, fall back to the Omarchy
   // default agent — same logic as the "no ai.json" path above.
   if (!agentSetInJson) {
-    var oa2 = String(omarchyAgent || "").split("\n")[0].trim().toLowerCase()
-    if (oa2 && SUPPORTED_AGENTS.indexOf(oa2) !== -1) {
-      config.agent = oa2
-    }
+    var oa2 = omarchyDefaultAgent(omarchyAgent)
+    if (oa2) config.agent = oa2
   }
 
   var warning = null

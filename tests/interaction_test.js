@@ -191,4 +191,85 @@ assert(/"wl-paste", "--no-newline", "--type", "text"/.test(qml), "paste reads te
 }
 assert(/Quickshell\.execDetached\(Backend\.terminalArgv\(target\)\)/.test(qml), "Ctrl+T uses terminalArgv")
 
+// The answer panel renders agent output as Markdown, so it only ever gets the
+// filtered text, and a click only ever opens an https link.
+{
+  const answerStart = qml.indexOf("id: aiAnswerText")
+  const answer = qml.slice(answerStart, qml.indexOf("wrapMode", answerStart))
+  assert(/text: AiBackend\.answerMarkdown\(root\.aiSession\)/.test(answer), "the answer panel renders only the filtered text")
+  assert(!/displayedText|text:\s*\{/.test(answer), "and builds no text of its own")
+  const opened = [], warned = []
+  const ctx = {
+    AiBackend: { isOpenableLink: link => link === "https://ok.example" },
+    Qt: { openUrlExternally: link => opened.push(link) },
+    console: { warn: message => warned.push(message) },
+    root: {}
+  }
+  vm.createContext(ctx)
+  vm.runInContext("root.aiOpenLink = function(link) {" + block("function aiOpenLink(link)") + "}", ctx)
+  ctx.root.aiOpenLink("https://ok.example")
+  ctx.root.aiOpenLink("file:///etc/passwd")
+  assert(opened.join() === "https://ok.example", "only an allowed link is opened")
+  assert(warned.length === 1, "a refused link leaves a trace in the log")
+  assert(/onLinkActivated: function\(link\) \{ root\.aiOpenLink\(link\) \}/.test(qml), "links go through that check")
+}
+
+// A default agent with no adapter is not "not installed": Enter has to reach
+// beginGeneration, which reports it, and nothing looks for a binary.
+{
+  const ctx = {
+    AiBackend: { agentDisplay: () => ({ supported: false, binary: "kimi" }) },
+    aiBinaryCheck: { running: false, checkingFor: "", command: null },
+    root: { aiBinaryChecked: false, aiBinaryMissing: true, aiBinaryCheckedFor: "" }
+  }
+  vm.createContext(ctx)
+  vm.runInContext("root.ensureAiBinaryChecked = function() {" + block("function ensureAiBinaryChecked()") + "}", ctx)
+  ctx.root.ensureAiBinaryChecked()
+  assert(ctx.root.aiBinaryMissing === false, "an agent with no adapter does not block Enter")
+  assert(ctx.root.aiBinaryChecked === true && !ctx.aiBinaryCheck.running, "and no binary check runs for it")
+}
+
+// A run stopped by the output limit or the idle timeout is killed by
+// generation, so it can never take a newer run with it.
+function makeStopper() {
+  const ctx = {
+    killed: [],
+    aiProcA: { name: "A", gen: 4 }, aiProcB: { name: "B", gen: 5 },
+    aiKillFallbackTimerA: {}, aiKillFallbackTimerB: {},
+    queuedStops: [],
+    Qt: { callLater: (fn, gen) => ctx.queuedStops.push(gen) },
+    root: { aiPendingSpawn: null, aiSession: null }
+  }
+  vm.createContext(ctx)
+  vm.runInContext(`
+    root.aiKillProcessIfRunning = function(proc) { killed.push(proc.name) }
+    root.aiStopGeneration = function(gen) {` + block("function aiStopGeneration(gen)") + `}
+    root.aiShowSnapshot = function(snap) {` + block("function aiShowSnapshot(snap)") + `}
+  `, ctx)
+  return ctx
+}
+{
+  let ctx = makeStopper()
+  ctx.root.aiStopGeneration(5)
+  assert(ctx.killed.join() === "B", "only the slot running that generation is stopped")
+  ctx = makeStopper()
+  ctx.root.aiPendingSpawn = { generation: 6, argv: [] }
+  ctx.root.aiStopGeneration(6)
+  assert(ctx.killed.length === 0 && ctx.root.aiPendingSpawn === null, "a run still queued never starts")
+  ctx = makeStopper()
+  ctx.root.aiPendingSpawn = { generation: 7, argv: [] }
+  ctx.root.aiStopGeneration(6)
+  assert(ctx.root.aiPendingSpawn !== null, "another run's queued spawn is left alone")
+
+  ctx = makeStopper()
+  ctx.root.aiShowSnapshot({ state: "running", shouldStop: false, generation: 4 })
+  assert(ctx.queuedStops.length === 0 && ctx.root.aiSession.state === "running", "a normal snapshot just renders")
+  ctx.root.aiShowSnapshot({ state: "error", shouldStop: true, generation: 4 })
+  assert(ctx.queuedStops.join() === "4" && ctx.killed.length === 0, "a stop waits for the next turn, outside the process's own callback")
+
+  assert(/root\.aiShowSnapshot\(snap\)/.test(block("function onAiLine(gen, line)")), "agent output can stop its own run")
+  assert(/AiBackend\.checkIdle\(Date\.now\(\)\)/.test(block("id: aiIdleWatchdog")), "the watchdog asks about the running session")
+  assert(/root\.aiShowSnapshot\(snap\)/.test(block("id: aiIdleWatchdog")), "and stops it through the same path")
+}
+
 console.log(`${passed} interaction tests passed`)

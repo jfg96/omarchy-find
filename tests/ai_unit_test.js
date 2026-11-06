@@ -1105,6 +1105,153 @@ for (const id of ["claude", "codex", "agy", "opencode", "pi"]) {
   }
 }
 
+{
+  // Answers are agent output, so anything a file or a web page steered the
+  // agent into writing reaches this renderer. An image in Markdown is fetched
+  // the moment it renders, with no click.
+  const hasImage = text => /!\[/.test(text)
+  const hasTag = text => /<[a-z/!?]/i.test(text)
+
+  assert(!hasImage(AiBackend.safeMarkdown("look ![a](https://example.invalid/t?d=secret)")),
+    "an inline image never reaches the renderer")
+  assert(!hasImage(AiBackend.safeMarkdown("![a][r]\n\n[r]: https://example.invalid/t")),
+    "a reference image never reaches the renderer")
+  assert(!hasImage(AiBackend.safeMarkdown("\\\\![a](https://example.invalid/t)")),
+    "an escaped backslash in front does not bring the image back")
+  assert(!hasImage(AiBackend.safeMarkdown("[![a](https://example.invalid/t)](https://example.invalid/l)")),
+    "an image nested in a link is neutralized too")
+  assert(!hasTag(AiBackend.safeMarkdown('<img src="https://example.invalid/t">')), "raw HTML tags never reach the renderer")
+  assert(!hasTag(AiBackend.safeMarkdown('<IMG\nsrc="https://example.invalid/t">')), "whatever their case")
+  assert(!hasTag(AiBackend.safeMarkdown('<table background="https://example.invalid/t">')), "other tags too")
+  assert(!hasTag(AiBackend.safeMarkdown("<!-- x --> </div> <?php")), "nor comments, closing tags or instructions")
+
+  // The neutralized text must still read the same on screen.
+  const visible = text => text.replace(/​/g, "")
+  const plain = "**bold** `vec![1, 2]` a < b, [link](https://example.com)\n\n```rust\nVec<T>\n```"
+  eq(visible(AiBackend.safeMarkdown(plain)), plain, "only an invisible character is added, so code still reads the same")
+  eq(AiBackend.safeMarkdown("no markup here"), "no markup here", "ordinary text is left exactly as it was")
+  eq(AiBackend.safeMarkdown(null), "", "no text renders as nothing")
+}
+
+{
+  // Every string the answer panel shows goes through the same filter,
+  // including error messages, which adapters copy from agent output.
+  AiBackend.loadConfig(JSON.stringify({ agent: "claude" }))
+  AiBackend.cancel()
+  const g = AiBackend.beginGeneration("render test")
+  AiBackend.handleLine(g.generation, '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"![a](https://example.invalid/answer)"}}}')
+  const errored = AiBackend.handleLine(g.generation, JSON.stringify({ type: "result", is_error: true, result: "![b](https://example.invalid/error)" }))
+  const rendered = AiBackend.answerMarkdown(errored)
+  assert(rendered.indexOf("![") === -1, "the answer panel shows neither the partial answer's image nor the error's")
+  assert(rendered.indexOf("⚠ ") !== -1, "a partial answer keeps its separate error line")
+  eq(errored.rawText, "![a](https://example.invalid/answer)", "Ctrl+C still copies what the agent wrote")
+  eq(AiBackend.answerMarkdown(null), "", "no session renders as nothing")
+  AiBackend.cancel()
+  const idle = AiBackend.snapshot()
+  eq(AiBackend.answerMarkdown(idle), "", "an idle session renders as nothing")
+}
+
+{
+  // Clicking a link hands it to whatever handles its scheme.
+  assert(AiBackend.isOpenableLink("https://example.com/a?b=c"), "https links open")
+  assert(AiBackend.isOpenableLink("HTTPS://EXAMPLE.COM"), "whatever their case")
+  for (const link of ["file:///etc/passwd", "http://example.com", "javascript:alert(1)", "steam://run/1", "", null, "https://a\nb"]) {
+    assert(!AiBackend.isOpenableLink(link), "not opened: " + link)
+  }
+}
+
+{
+  // A default agent with no adapter stops with an error. It must never run
+  // another agent: the prompt would go to a provider the user did not pick.
+  for (const agent of ["kimi", "hermes", "qwen", "some-future-cli"]) {
+    const r = AiConfig.mergeConfig(null, agent)
+    eq(r.config.agent, agent, agent + " as the Omarchy default is kept, not swapped for claude")
+    const withFile = AiConfig.mergeConfig(JSON.stringify({ prefix: "ask " }), agent)
+    eq(withFile.config.agent, agent, agent + " is kept too when ai.json sets no agent")
+  }
+  eq(AiConfig.mergeConfig(null, "OpenCode\nignored\n").config.agent, "opencode", "a supported default keeps working")
+  eq(AiConfig.mergeConfig(null, "").config.agent, "claude", "no Omarchy default at all keeps the built-in one")
+  eq(AiConfig.mergeConfig(JSON.stringify({ agent: "pi" }), "kimi").config.agent, "pi", "an explicit ai.json agent still wins")
+  eq(AiConfig.mergeConfig(null, "x".repeat(500)).config.agent.length, 64, "the value read from disk is bounded")
+
+  AiBackend.loadConfig(null, "kimi")
+  AiBackend.cancel()
+  const disp = AiBackend.agentDisplay()
+  eq(disp.supported, false, "the chip knows this agent has no adapter")
+  const g = AiBackend.beginGeneration("secret question")
+  assert(g.argv === null, "nothing is spawned for an agent with no adapter")
+  const snap = AiBackend.snapshot()
+  eq(snap.state, "error", "the user gets an error")
+  assert(snap.errorMessage.indexOf("kimi") !== -1, "which names the agent")
+  assert(snap.errorMessage.indexOf("claude") !== -1, "and the agents that do work")
+  AiBackend.cancel()
+  AiBackend.loadConfig(null)
+}
+
+{
+  // Output limits. Agent output is not ours, so memory stays bounded and a
+  // run that overflows is stopped, keeping what it already said.
+  AiBackend.loadConfig(JSON.stringify({ agent: "claude" }))
+  AiBackend.cancel()
+  const g = AiBackend.beginGeneration("limit test")
+  const delta = n => JSON.stringify({ type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "a".repeat(n) } } })
+  let snap = AiBackend.handleLine(g.generation, delta(1000))
+  eq(snap.shouldStop, false, "a normal answer keeps running")
+  snap = AiBackend.handleLine(g.generation, delta(AiBackend.MAX_ANSWER_CHARS))
+  eq(snap.rawText.length, AiBackend.MAX_ANSWER_CHARS, "the answer stops growing at its limit")
+  eq(snap.state, "error", "an overflowing answer ends in an error")
+  eq(snap.errorKind, "limit", "of its own kind")
+  eq(snap.shouldStop, true, "and asks the caller to stop the process")
+  eq(snap.displayedText.length, AiBackend.MAX_ANSWER_CHARS, "what was received stays visible")
+  assert(AiBackend.handleLine(g.generation, delta(10)) === null, "the last output of a stopped run is ignored")
+
+  AiBackend.cancel()
+  const whole = AiBackend.beginGeneration("final text limit test")
+  AiBackend.handleLine(whole.generation, JSON.stringify({ type: "result", is_error: false, result: "b".repeat(AiBackend.MAX_ANSWER_CHARS + 1) }))
+  const ended = AiBackend.handleExit(whole.generation, 0)
+  eq(ended.errorKind, "limit", "an answer that only arrives at exit is held to the same limit")
+  eq(ended.state, "error", "and a clean exit does not hide that")
+
+  AiBackend.cancel()
+  const g2 = AiBackend.beginGeneration("stderr limit test")
+  AiBackend.handleStderrChunk(g2.generation, "x".repeat(AiBackend.MAX_STDERR_CHARS * 2))
+  AiBackend.handleStderrChunk(g2.generation, "please run login")
+  const failed = AiBackend.handleExit(g2.generation, 1)
+  eq(failed.errorKind, "auth", "stderr keeps its tail, where the reason for a failure is")
+  eq(AiBackend.session.stderrText.length, AiBackend.MAX_STDERR_CHARS, "and never grows past its limit")
+}
+
+{
+  // An agent that goes quiet is stopped, not left "thinking" forever.
+  eq(AiConfig.DEFAULT_CONFIG.idleTimeoutSec, 300, "agents get five quiet minutes by default")
+  eq(AiConfig.mergeConfig(JSON.stringify({ idleTimeoutSec: 60 })).config.idleTimeoutSec, 60, "ai.json can change that")
+  for (const bad of [0, 5, 100000, "soon"]) {
+    eq(AiConfig.mergeConfig(JSON.stringify({ idleTimeoutSec: bad })).config.idleTimeoutSec, 300, "out of range falls back: " + bad)
+  }
+
+  AiBackend.loadConfig(JSON.stringify({ agent: "claude", idleTimeoutSec: 60 }))
+  AiBackend.cancel()
+  const g = AiBackend.beginGeneration("idle test", 1000)
+  assert(AiBackend.checkIdle(60999) === null, "quiet for less than the limit is fine")
+  AiBackend.handleLine(g.generation, '{"type":"system","subtype":"status","status":"requesting"}', 50000)
+  assert(AiBackend.checkIdle(109999) === null, "any output restarts the clock")
+  const timedOut = AiBackend.checkIdle(110000)
+  eq(timedOut.state, "error", "a quiet agent ends in an error")
+  eq(timedOut.errorKind, "timeout", "of its own kind")
+  eq(timedOut.shouldStop, true, "and asks the caller to stop the process")
+  assert(timedOut.errorMessage.indexOf("60") !== -1, "the message says how long it waited")
+  assert(AiBackend.checkIdle(999999) === null, "it fires once")
+
+  AiBackend.cancel()
+  assert(AiBackend.checkIdle(999999) === null, "nothing to time out without a session")
+
+  const done = AiBackend.beginGeneration("idle after output", 1000)
+  AiBackend.handleLine(done.generation, '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}}', 1000)
+  AiBackend.handleExit(done.generation, 0)
+  assert(AiBackend.checkIdle(999999) === null, "an agent that already exited has nothing left to stop")
+  AiBackend.cancel()
+}
+
 // ------------------------------------------------------------- summary ----
 
 console.log("")

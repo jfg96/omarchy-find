@@ -46,6 +46,8 @@ https://github.com/user-attachments/assets/5b8921af-0453-403d-82b3-56987d6f8622
 
 By default, Omarchy Find automatically detects and uses the default AI agent configured in your Omarchy system (`~/.config/omarchy/defaults/agent`).
 
+Omarchy offers more agents than these five; see [What Leaves Your Machine](#what-leaves-your-machine) for what happens with the rest.
+
 | Omarchy Default Agent | AI Search Mode Status |
 |---|---|
 | **Antigravity** (`agy`) | ✅ Fully supported (automatic streaming & terminal handoff) |
@@ -96,11 +98,22 @@ If you wish to use a different agent specifically inside Omarchy Find (for examp
   "agent": "agy",          // "agy" | "opencode" | "claude" | "codex" | "pi"
   "model": null,           // Override model string (e.g. "opencode-go/qwen3.8-flash") or null for CLI default
   "prefix": "ai ",         // Trigger prefix in the overlay
-  "maxAnswerRows": 6       // Maximum visible answer lines before scrolling
+  "maxAnswerRows": 6,      // Maximum visible answer lines before scrolling
+  "idleTimeoutSec": 300    // Stop an agent that writes nothing for this long
 }
 ```
 
 The plugin hot-reloads config changes live without requiring a shell restart.
+
+An agent that writes nothing for `idleTimeoutSec` seconds (default `300`, from `30` to `3600`) is stopped with an error. Set it in `ai.json` if yours thinks for longer.
+
+### What Leaves Your Machine
+
+Nothing runs until you press `Enter`. Omarchy Find then passes your question, and only your question, to the agent's own CLI, which sends it to that agent's provider. The CLI runs from your home folder with its own default permissions, so what else it reads depends on that CLI.
+
+Your Omarchy default agent is never swapped for another one. If it isn't one of the five above, `Enter` shows an error and nothing is sent. An `"agent"` value in `ai.json` that isn't one of the five is the exception: it falls back to your Omarchy default agent, or to Claude if you have none, with a warning next to the status chip. With no Omarchy default and no `ai.json`, Omarchy Find uses Claude.
+
+Answers are treated as untrusted. Images in them are shown as text and never loaded, HTML is shown as text, and links open only over `https`. An answer stops at 100,000 characters.
 
 ### Returning to the System Default Agent (Removing Override)
 
