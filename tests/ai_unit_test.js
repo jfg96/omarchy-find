@@ -1152,6 +1152,10 @@ for (const id of ["claude", "codex", "agy", "opencode", "pi"]) {
 }
 
 {
+  eq(AiBackend.notificationText('claude --resume <img src="x">&'), 'claude --resume &lt;img src="x"&gt;&amp;', "a notification body carries no markup")
+}
+
+{
   // Clicking a link hands it to whatever handles its scheme.
   assert(AiBackend.isOpenableLink("https://example.com/a?b=c"), "https links open")
   assert(AiBackend.isOpenableLink("HTTPS://EXAMPLE.COM"), "whatever their case")

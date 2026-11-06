@@ -238,7 +238,10 @@ Item {
     root.searching = false
   }
 
+  // The host calls this from hide(), including the hide() in dismiss(), which
+  // has done all of this already and may be keeping a handoff attempt alive.
   function close() {
+    if (!root.opened) return
     root.cancelProcs()
     root.aiCancel()
     // AI mode is derived from filterText, which close()/dismiss() don't
@@ -248,24 +251,6 @@ Item {
     // would still be showing under the new question (QA P0-5).
     root.aiSession = AiBackend.snapshot()
     root.opened = false
-  }
-
-  function switchPanel(direction) {
-    if (root.shell && root.shell.bars) {
-      for (var i = 0; i < root.shell.bars.length; i++) {
-        var b = root.shell.bars[i]
-        if (b && typeof b.switchPanelFrom === "function" && typeof b.moduleWidgets === "function") {
-          var widgets = b.moduleWidgets(root.pluginId())
-          if (widgets && widgets.length > 0) {
-            if (b.switchPanelFrom(widgets[0], direction)) {
-              root.dismiss()
-              return true
-            }
-          }
-        }
-      }
-    }
-    return false
   }
 
   // preserveHandoffAttempt: true ONLY for the grace-timer's own "assume the
@@ -1470,7 +1455,7 @@ Item {
         // no UI left to show an error in (plan §21 can't be honored
         // post-hoc). Surface it loudly instead of losing it silently.
         Quickshell.execDetached(["notify-send", "Omarchy Find",
-          "Terminal failed to open — resume manually: " + aiHandoffProcess.resumeArgv.join(" ")])
+          "Terminal failed to open — resume manually: " + AiBackend.notificationText(aiHandoffProcess.resumeArgv.join(" "))])
       }
     }
   }
@@ -1507,15 +1492,10 @@ Item {
 
   // UI
 
-  PanelWindow {
+  OverlayWindow {
     id: panel
-    visible: root.opened
-    anchors { top: true; bottom: true; left: true; right: true }
-    color: "transparent"
+    shown: root.opened
     WlrLayershell.namespace: "omarchy-find"
-    WlrLayershell.layer: WlrLayer.Overlay
-    WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
-    exclusionMode: ExclusionMode.Ignore
 
     Rectangle {
       anchors.fill: parent
@@ -1551,7 +1531,7 @@ Item {
       // animates height changes of its own (expanding, the AI answer box).
       Behavior on height {
         enabled: !searchFieldGrow.running
-        NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
+        NumberAnimation { duration: Style.duration(root.expanded ? 180 : 120); easing.type: Easing.OutCubic }
       }
 
       color: root.background
@@ -1587,30 +1567,12 @@ Item {
             root.pasteClipboard()
             event.accepted = true
           } else if (event.key === Qt.Key_Backtab || (event.key === Qt.Key_Tab && (event.modifiers & Qt.ShiftModifier))) {
-            if (root.switchPanel(-1)) {
-              event.accepted = true
-            } else if (root.expanded && !root.isAiMode) {
-              root.cycleFilter(-1)
-              event.accepted = true
-            } else {
-              event.accepted = true
-            }
+            if (root.expanded) root.cycleFilter(-1)
+            event.accepted = true
           } else if (event.key === Qt.Key_Tab) {
-            if (root.isGoogleSearch || root.isAiMode) {
-              event.accepted = true
-            } else if (root.expanded && root.filterText.trim() !== "") {
-              root.cycleFilter(1)
-              event.accepted = true
-            } else if (!root.switchPanel(1)) {
-              if (root.expanded) {
-                root.cycleFilter(1)
-              } else {
-                root.expandForBrowse()
-              }
-              event.accepted = true
-            } else {
-              event.accepted = true
-            }
+            if (root.expanded) root.cycleFilter(1)
+            else root.expandForBrowse()
+            event.accepted = true
           } else if (Util.editsFilter(event, root.filterText)) {
             root.setFilter(Util.editedFilter(event, root.filterText))
             event.accepted = true
@@ -1740,7 +1702,7 @@ Item {
           color: "transparent"
 
           Behavior on height {
-            NumberAnimation { id: searchFieldGrow; duration: 180; easing.type: Easing.OutCubic }
+            NumberAnimation { id: searchFieldGrow; duration: Style.duration(180); easing.type: Easing.OutCubic }
           }
 
           Text {

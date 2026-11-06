@@ -513,6 +513,15 @@ function answerMarkdown(snap) {
   return safeMarkdown(snap.displayedText ? snap.displayedText + "\n\n\u26a0 " + message : message)
 }
 
+// Notification bodies are markup, and a resume command carries a session id
+// the agent reported.
+function notificationText(text) {
+  return String(text === null || text === undefined ? "" : text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+}
+
 // A link in an answer opens only over https: any other scheme goes to whatever
 // handles it on this machine, which is not for agent output to pick.
 function isOpenableLink(link) {

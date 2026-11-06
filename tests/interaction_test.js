@@ -251,6 +251,58 @@ assert(/Quickshell\.execDetached\(Backend\.terminalArgv\(target\)\)/.test(qml), 
   assert(!ctx.aiBinaryCheck.running, "a found one is remembered")
 }
 
+// The host's hide() calls close(). Inside dismiss(), that must not undo what
+// the caller asked for: the grace timer keeps its handoff attempt so a late
+// terminal failure can still notify.
+function makeDismisser() {
+  const ctx = {
+    AiBackend: { snapshot: () => ({}) },
+    root: { opened: true, aiHandoffAttempt: 1, shell: {}, cancels: 0 }
+  }
+  vm.createContext(ctx)
+  vm.runInContext(`
+    root.pluginId = function() { return "oma.find" }
+    root.cancelProcs = function() {}
+    root.aiCancel = function(invalidateHandoff) {
+      root.cancels++
+      if (invalidateHandoff !== false) root.aiHandoffAttempt++
+    }
+    root.close = function() {` + block("function close()") + `}
+    root.dismiss = function(preserveHandoffAttempt) {` + block("function dismiss(preserveHandoffAttempt)") + `}
+    root.shell.hide = function() { root.close(); return true }
+  `, ctx)
+  return ctx
+}
+{
+  let ctx = makeDismisser()
+  ctx.root.dismiss(true)
+  assert(ctx.root.aiHandoffAttempt === 1, "the grace dismiss keeps its attempt through the host's hide()")
+  assert(ctx.root.opened === false && ctx.root.cancels === 1, "and tears down once")
+  ctx = makeDismisser()
+  ctx.root.dismiss()
+  assert(ctx.root.aiHandoffAttempt === 2, "a real dismiss invalidates the attempt")
+  ctx = makeDismisser()
+  ctx.root.close()
+  assert(ctx.root.opened === false && ctx.root.aiHandoffAttempt === 2, "a close from the host still tears everything down")
+  assert(/AiBackend\.notificationText\(aiHandoffProcess\.resumeArgv/.test(qml), "the notification body is neutralized")
+}
+
+// The overlay's window comes from the host, like every first-party overlay's.
+{
+  assert(/OverlayWindow \{\s*id: panel\s*shown: root\.opened/.test(qml), "the overlay uses OverlayWindow")
+  assert(!/PanelWindow/.test(qml), "and no window of its own")
+  assert(!/switchPanel|shell\.bars/.test(qml), "the bar's panel switching is not reachable from an overlay")
+  assert(!/duration:\s*\d/.test(qml), "every animation goes through Style.duration")
+  assert(/duration: Style\.duration\(root\.expanded \? 180 : 120\)/.test(qml), "collapsing is shorter than expanding")
+}
+
+// The bar's Tab order takes in any widget with open(), close() and opened.
+{
+  const widget = fs.readFileSync(path.join(root, "Widget.qml"), "utf8")
+  assert(!/property bool opened\b/.test(widget), "the widget stays out of the bar's panel navigation")
+  assert(/active: root\.overlayOpen/.test(widget), "while its button still shows the overlay open")
+}
+
 // The answer panel renders agent output as Markdown, so it only ever gets the
 // filtered text, and a click only ever opens an https link.
 {
