@@ -103,7 +103,7 @@ function makeList() {
   ctx.root.expanded = false
   ctx.debounce.running = true
   ctx.root.requestAction("open")
-  assert(ctx.acted.join() === "open 0" && ctx.root.pendingAction === "", "a collapsed overlay never queues an action for a later list")
+  assert(ctx.acted.length === 0 && ctx.root.pendingAction === "", "a collapsed overlay never queues an action for a later list")
 }
 assert(/root\.flushPendingAction\(\)\s*\n\s*}/.test(block("function presentResults(items, mtimesKnown)") + "\n}"), "showing results runs a pending action")
 for (const fn of ["function setFilter(nextFilter)", "function cancelProcs()", "function setActiveFilter(index)"])
@@ -190,5 +190,198 @@ assert(/"wl-paste", "--no-newline", "--type", "text"/.test(qml), "paste reads te
   fs.rmSync(sandbox, { recursive: true, force: true })
 }
 assert(/Quickshell\.execDetached\(Backend\.terminalArgv\(target\)\)/.test(qml), "Ctrl+T uses terminalArgv")
+
+// A collapsed card shows no rows, so the model's leftovers from an earlier
+// search are out of reach of every action.
+{
+  const ctx = makeList()
+  ctx.root.expanded = false
+  for (const kind of ["open", "folder", "copy", "terminal"]) ctx.root.requestAction(kind)
+  assert(ctx.acted.length === 0, "nothing acts on results the collapsed card does not show")
+}
+
+// Filters do not apply to a Google or AI query, and changing one would clear
+// the Google row Enter is about to open.
+{
+  const changed = []
+  const ctx = {
+    Backend: { FILTERS: [{}, {}] },
+    root: { isGoogleSearch: true, isAiMode: false, activeFilter: 0, setActiveFilter: i => changed.push(i) }
+  }
+  vm.createContext(ctx)
+  vm.runInContext("root.cycleFilter = function(delta) {" + block("function cycleFilter(delta)") + "}", ctx)
+  ctx.root.cycleFilter(-1)
+  assert(changed.length === 0, "Shift+Tab leaves a Google query alone")
+  ctx.root.isGoogleSearch = false
+  ctx.root.cycleFilter(-1)
+  assert(changed.join() === "1", "and cycles filters otherwise")
+}
+
+// A process that never started reports no exit, so every process with a busy
+// flag has to clear it from its running change.
+{
+  const ctx = { root: {} }
+  vm.createContext(ctx)
+  vm.runInContext("root.procFailedToStart = function(proc) {" + block("function procFailedToStart(proc)") + "}", ctx)
+  assert(ctx.root.procFailedToStart({ busy: true, started: false }), "busy without started is a failed start")
+  assert(!ctx.root.procFailedToStart({ busy: false, started: true }), "a normal exit has already cleared busy")
+  assert(!ctx.root.procFailedToStart({ busy: true, started: true }), "a running process is no failure")
+  for (const id of ["procDirs", "procFiles", "procStat", "pasteProc"]) {
+    assert(new RegExp("root\\.procFailedToStart\\(" + id + "\\)").test(qml), id + " recovers from a failed start")
+  }
+  assert(/searchProcExited\(procDirs, "", -1\)/.test(qml) && /searchProcExited\(procFiles, "", -1\)/.test(qml), "a failed search finishes like an empty one")
+  assert(backend.pastedText("x".repeat(200000)).length === backend.MAX_PASTE_CHARS, "a paste stays within what one argument can hold")
+}
+
+// A CLI installed after a failed check is found on the next look.
+{
+  const ctx = {
+    AiBackend: { agentDisplay: () => ({ supported: true, binary: "claude" }) },
+    aiBinaryCheck: { running: false, checkingFor: "claude", command: null },
+    root: { aiBinaryChecked: true, aiBinaryMissing: true, aiBinaryCheckedFor: "claude" }
+  }
+  vm.createContext(ctx)
+  vm.runInContext("root.ensureAiBinaryChecked = function() {" + block("function ensureAiBinaryChecked()") + "}", ctx)
+  ctx.root.ensureAiBinaryChecked()
+  assert(ctx.aiBinaryCheck.running, "a missing binary is looked for again")
+  ctx.aiBinaryCheck.running = false
+  ctx.root.aiBinaryChecked = true
+  ctx.root.aiBinaryMissing = false
+  ctx.root.ensureAiBinaryChecked()
+  assert(!ctx.aiBinaryCheck.running, "a found one is remembered")
+}
+
+// The host's hide() calls close(). Inside dismiss(), that must not undo what
+// the caller asked for: the grace timer keeps its handoff attempt so a late
+// terminal failure can still notify.
+function makeDismisser() {
+  const ctx = {
+    AiBackend: { snapshot: () => ({}) },
+    root: { opened: true, aiHandoffAttempt: 1, shell: {}, cancels: 0 }
+  }
+  vm.createContext(ctx)
+  vm.runInContext(`
+    root.pluginId = function() { return "oma.find" }
+    root.cancelProcs = function() {}
+    root.aiCancel = function(invalidateHandoff) {
+      root.cancels++
+      if (invalidateHandoff !== false) root.aiHandoffAttempt++
+    }
+    root.close = function() {` + block("function close()") + `}
+    root.dismiss = function(preserveHandoffAttempt) {` + block("function dismiss(preserveHandoffAttempt)") + `}
+    root.shell.hide = function() { root.close(); return true }
+  `, ctx)
+  return ctx
+}
+{
+  let ctx = makeDismisser()
+  ctx.root.dismiss(true)
+  assert(ctx.root.aiHandoffAttempt === 1, "the grace dismiss keeps its attempt through the host's hide()")
+  assert(ctx.root.opened === false && ctx.root.cancels === 1, "and tears down once")
+  ctx = makeDismisser()
+  ctx.root.dismiss()
+  assert(ctx.root.aiHandoffAttempt === 2, "a real dismiss invalidates the attempt")
+  ctx = makeDismisser()
+  ctx.root.close()
+  assert(ctx.root.opened === false && ctx.root.aiHandoffAttempt === 2, "a close from the host still tears everything down")
+  assert(/AiBackend\.notificationText\(aiHandoffProcess\.resumeArgv/.test(qml), "the notification body is neutralized")
+}
+
+// The overlay's window comes from the host, like every first-party overlay's.
+{
+  assert(/OverlayWindow \{\s*id: panel\s*shown: root\.opened/.test(qml), "the overlay uses OverlayWindow")
+  assert(!/PanelWindow/.test(qml), "and no window of its own")
+  assert(!/switchPanel|shell\.bars/.test(qml), "the bar's panel switching is not reachable from an overlay")
+  assert(!/duration:\s*\d/.test(qml), "every animation goes through Style.duration")
+  assert(/duration: Style\.duration\(root\.expanded \? 180 : 120\)/.test(qml), "collapsing is shorter than expanding")
+}
+
+// The bar's Tab order takes in any widget with open(), close() and opened.
+{
+  const widget = fs.readFileSync(path.join(root, "Widget.qml"), "utf8")
+  assert(!/property bool opened\b/.test(widget), "the widget stays out of the bar's panel navigation")
+  assert(/active: root\.overlayOpen/.test(widget), "while its button still shows the overlay open")
+}
+
+// The answer panel renders agent output as Markdown, so it only ever gets the
+// filtered text, and a click only ever opens an https link.
+{
+  const answerStart = qml.indexOf("id: aiAnswerText")
+  const answer = qml.slice(answerStart, qml.indexOf("wrapMode", answerStart))
+  assert(/text: AiBackend\.answerMarkdown\(root\.aiSession\)/.test(answer), "the answer panel renders only the filtered text")
+  assert(!/displayedText|text:\s*\{/.test(answer), "and builds no text of its own")
+  const opened = [], warned = []
+  const ctx = {
+    AiBackend: { isOpenableLink: link => link === "https://ok.example" },
+    Qt: { openUrlExternally: link => opened.push(link) },
+    console: { warn: message => warned.push(message) },
+    root: {}
+  }
+  vm.createContext(ctx)
+  vm.runInContext("root.aiOpenLink = function(link) {" + block("function aiOpenLink(link)") + "}", ctx)
+  ctx.root.aiOpenLink("https://ok.example")
+  ctx.root.aiOpenLink("file:///etc/passwd")
+  assert(opened.join() === "https://ok.example", "only an allowed link is opened")
+  assert(warned.length === 1, "a refused link leaves a trace in the log")
+  assert(/onLinkActivated: function\(link\) \{ root\.aiOpenLink\(link\) \}/.test(qml), "links go through that check")
+}
+
+// A default agent with no adapter is not "not installed": Enter has to reach
+// beginGeneration, which reports it, and nothing looks for a binary.
+{
+  const ctx = {
+    AiBackend: { agentDisplay: () => ({ supported: false, binary: "kimi" }) },
+    aiBinaryCheck: { running: false, checkingFor: "", command: null },
+    root: { aiBinaryChecked: false, aiBinaryMissing: true, aiBinaryCheckedFor: "" }
+  }
+  vm.createContext(ctx)
+  vm.runInContext("root.ensureAiBinaryChecked = function() {" + block("function ensureAiBinaryChecked()") + "}", ctx)
+  ctx.root.ensureAiBinaryChecked()
+  assert(ctx.root.aiBinaryMissing === false, "an agent with no adapter does not block Enter")
+  assert(ctx.root.aiBinaryChecked === true && !ctx.aiBinaryCheck.running, "and no binary check runs for it")
+}
+
+// A run stopped by the output limit or the idle timeout is killed by
+// generation, so it can never take a newer run with it.
+function makeStopper() {
+  const ctx = {
+    killed: [],
+    aiProcA: { name: "A", gen: 4 }, aiProcB: { name: "B", gen: 5 },
+    aiKillFallbackTimerA: {}, aiKillFallbackTimerB: {},
+    queuedStops: [],
+    Qt: { callLater: (fn, gen) => ctx.queuedStops.push(gen) },
+    root: { aiPendingSpawn: null, aiSession: null }
+  }
+  vm.createContext(ctx)
+  vm.runInContext(`
+    root.aiKillProcessIfRunning = function(proc) { killed.push(proc.name) }
+    root.aiStopGeneration = function(gen) {` + block("function aiStopGeneration(gen)") + `}
+    root.aiShowSnapshot = function(snap) {` + block("function aiShowSnapshot(snap)") + `}
+  `, ctx)
+  return ctx
+}
+{
+  let ctx = makeStopper()
+  ctx.root.aiStopGeneration(5)
+  assert(ctx.killed.join() === "B", "only the slot running that generation is stopped")
+  ctx = makeStopper()
+  ctx.root.aiPendingSpawn = { generation: 6, argv: [] }
+  ctx.root.aiStopGeneration(6)
+  assert(ctx.killed.length === 0 && ctx.root.aiPendingSpawn === null, "a run still queued never starts")
+  ctx = makeStopper()
+  ctx.root.aiPendingSpawn = { generation: 7, argv: [] }
+  ctx.root.aiStopGeneration(6)
+  assert(ctx.root.aiPendingSpawn !== null, "another run's queued spawn is left alone")
+
+  ctx = makeStopper()
+  ctx.root.aiShowSnapshot({ state: "running", shouldStop: false, generation: 4 })
+  assert(ctx.queuedStops.length === 0 && ctx.root.aiSession.state === "running", "a normal snapshot just renders")
+  ctx.root.aiShowSnapshot({ state: "error", shouldStop: true, generation: 4 })
+  assert(ctx.queuedStops.join() === "4" && ctx.killed.length === 0, "a stop waits for the next turn, outside the process's own callback")
+
+  assert(/root\.aiShowSnapshot\(snap\)/.test(block("function onAiLine(gen, line)")), "agent output can stop its own run")
+  assert(/AiBackend\.checkIdle\(Date\.now\(\)\)/.test(block("id: aiIdleWatchdog")), "the watchdog asks about the running session")
+  assert(/root\.aiShowSnapshot\(snap\)/.test(block("id: aiIdleWatchdog")), "and stops it through the same path")
+}
 
 console.log(`${passed} interaction tests passed`)

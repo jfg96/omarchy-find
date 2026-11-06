@@ -238,7 +238,10 @@ Item {
     root.searching = false
   }
 
+  // The host calls this from hide(), including the hide() in dismiss(), which
+  // has done all of this already and may be keeping a handoff attempt alive.
   function close() {
+    if (!root.opened) return
     root.cancelProcs()
     root.aiCancel()
     // AI mode is derived from filterText, which close()/dismiss() don't
@@ -248,24 +251,6 @@ Item {
     // would still be showing under the new question (QA P0-5).
     root.aiSession = AiBackend.snapshot()
     root.opened = false
-  }
-
-  function switchPanel(direction) {
-    if (root.shell && root.shell.bars) {
-      for (var i = 0; i < root.shell.bars.length; i++) {
-        var b = root.shell.bars[i]
-        if (b && typeof b.switchPanelFrom === "function" && typeof b.moduleWidgets === "function") {
-          var widgets = b.moduleWidgets(root.pluginId())
-          if (widgets && widgets.length > 0) {
-            if (b.switchPanelFrom(widgets[0], direction)) {
-              root.dismiss()
-              return true
-            }
-          }
-        }
-      }
-    }
-    return false
   }
 
   // preserveHandoffAttempt: true ONLY for the grace-timer's own "assume the
@@ -368,6 +353,8 @@ Item {
   }
 
   function cycleFilter(delta) {
+    // Filters do not apply here, and changing one would clear the Google row.
+    if (root.isGoogleSearch || root.isAiMode) return
     var count = Backend.FILTERS.length
     root.setActiveFilter((root.activeFilter + delta + count) % count)
   }
@@ -435,6 +422,7 @@ Item {
       pending++
       procDirs.gen = root.searchGen
       procDirs.cancelled = false
+      procDirs.started = false
       procDirs.command = Backend.buildArgv(root.filterText, root.activeFilter, true, root.home, root.searchHelperPath, root.searchExcludes)
       procDirs.busy = true
       procDirs.running = true
@@ -443,6 +431,7 @@ Item {
       pending++
       procFiles.gen = root.searchGen
       procFiles.cancelled = false
+      procFiles.started = false
       procFiles.command = Backend.buildArgv(root.filterText, root.activeFilter, false, root.home, root.searchHelperPath, root.searchExcludes)
       procFiles.busy = true
       procFiles.running = true
@@ -525,12 +514,21 @@ Item {
     }
   }
 
-  function searchProcExited(proc, text) {
+  // A Process that cannot start never reports `exited`, only `running` going
+  // false without `started`. Left alone, its busy flag would block every later
+  // search. A normal exit has already cleared busy by then.
+  function procFailedToStart(proc) {
+    return proc.busy && !proc.started
+  }
+
+  function searchProcExited(proc, text, exitCode) {
     var wasCancelled = proc.cancelled
     var generation = proc.gen
     proc.busy = false
     proc.cancelled = false
 
+    if (!wasCancelled && exitCode !== 0)
+      console.warn("[omarchy-find] search process failed (exit " + exitCode + ")")
     if (!wasCancelled && generation === root.searchGen && !root.isGoogleSearch) {
       root.procFinished(proc, text)
     }
@@ -584,7 +582,10 @@ Item {
   // While a search is pending the list still shows the previous query's
   // results, so an action asked for then waits for the typed query's own.
   function requestAction(kind) {
-    if (root.expanded && (debounce.running || root.searching)) {
+    // A collapsed card shows no rows: what the model still holds is an earlier
+    // search's, and nothing on screen says which one an action would hit.
+    if (!root.expanded) return
+    if (debounce.running || root.searching) {
       root.pendingAction = kind
       return
     }
@@ -621,6 +622,7 @@ Item {
     if (!hasPaths) return
     procStat.gen = root.searchGen
     procStat.cancelled = false
+    procStat.started = false
     procStat.command = argv
     procStat.busy = true
     procStat.running = true
@@ -787,13 +789,16 @@ Item {
   // free, instead of us racing a new command onto it here.
   function ensureAiBinaryChecked() {
     var disp = AiBackend.agentDisplay()
+    // No adapter: there is no binary to look for, and Enter must go through
+    // to AiBackend, which reports it without running anything.
     if (!disp.supported) {
       root.aiBinaryChecked = true
-      root.aiBinaryMissing = true
+      root.aiBinaryMissing = false
       return
     }
     root.aiBinaryCheckedFor = disp.binary
-    if (root.aiBinaryChecked && aiBinaryCheck.checkingFor === disp.binary) return
+    // Only a found binary is remembered: a missing one may be installed since.
+    if (root.aiBinaryChecked && !root.aiBinaryMissing && aiBinaryCheck.checkingFor === disp.binary) return
     if (aiBinaryCheck.running) return
     root.aiBinaryChecked = false
     aiBinaryCheck.checkingFor = disp.binary
@@ -890,6 +895,26 @@ Item {
     AiBackend.cancel()
   }
 
+  // Stops one run, whichever slot holds it, for a limit or a timeout. By
+  // generation, so a stop that lands late cannot take a newer run with it.
+  function aiStopGeneration(gen) {
+    if (root.aiPendingSpawn && root.aiPendingSpawn.generation === gen) root.aiPendingSpawn = null
+    if (aiProcA.gen === gen) root.aiKillProcessIfRunning(aiProcA, aiKillFallbackTimerA)
+    if (aiProcB.gen === gen) root.aiKillProcessIfRunning(aiProcB, aiKillFallbackTimerB)
+  }
+
+  // Deferred, so a process is never stopped from inside its own output
+  // callback (see aiFreeProc).
+  function aiShowSnapshot(snap) {
+    root.aiSession = snap
+    if (snap.shouldStop) Qt.callLater(root.aiStopGeneration, snap.generation)
+  }
+
+  function aiOpenLink(link) {
+    if (AiBackend.isOpenableLink(link)) Qt.openUrlExternally(link)
+    else console.warn("[omarchy-find/ai] refused to open a link that is not https")
+  }
+
   function aiSubmit() {
     if (!root.isAiMode || root.aiBinaryMissing) return
     var prompt = root.aiPromptText.trim()
@@ -904,7 +929,7 @@ Item {
 
   function onAiLine(gen, line) {
     var snap = AiBackend.handleLine(gen, line)
-    if (snap) root.aiSession = snap
+    if (snap) root.aiShowSnapshot(snap)
   }
 
   function onAiStderr(gen, line) {
@@ -1032,7 +1057,7 @@ Item {
   Component.onCompleted: searchConfigFile.reload()
 
   function applySearchConfig(text) {
-    var config = Backend.parseSearchConfig(text)
+    var config = Backend.parseSearchConfig(text, { engine: root.searchEngine, excludes: root.searchExcludes })
     var engine = config.engine
     var excludesChanged = Backend.userExcludesChanged(root.searchExcludes, config.excludes)
     if (excludesChanged) root.searchExcludes = config.excludes
@@ -1125,11 +1150,14 @@ Item {
     property string kind: "d"
     property bool busy: false
     property bool cancelled: false
+    property bool started: false
+    onStarted: started = true
+    onRunningChanged: if (!running && root.procFailedToStart(procDirs)) root.searchProcExited(procDirs, "", -1)
     stdout: StdioCollector {
       id: outDirs
       waitForEnd: true
     }
-    onExited: function(exitCode) { root.searchProcExited(procDirs, outDirs.text || "") }
+    onExited: function(exitCode) { root.searchProcExited(procDirs, outDirs.text || "", exitCode) }
   }
 
   Process {
@@ -1138,11 +1166,14 @@ Item {
     property string kind: "f"
     property bool busy: false
     property bool cancelled: false
+    property bool started: false
+    onStarted: started = true
+    onRunningChanged: if (!running && root.procFailedToStart(procFiles)) root.searchProcExited(procFiles, "", -1)
     stdout: StdioCollector {
       id: outFiles
       waitForEnd: true
     }
-    onExited: function(exitCode) { root.searchProcExited(procFiles, outFiles.text || "") }
+    onExited: function(exitCode) { root.searchProcExited(procFiles, outFiles.text || "", exitCode) }
   }
 
   Process {
@@ -1150,6 +1181,9 @@ Item {
     property int gen: 0
     property bool busy: false
     property bool cancelled: false
+    property bool started: false
+    onStarted: started = true
+    onRunningChanged: if (!running && root.procFailedToStart(procStat)) root.statProcExited("")
     stdout: StdioCollector {
       id: outStat
       waitForEnd: true
@@ -1161,12 +1195,16 @@ Item {
   function pasteClipboard() {
     if (pasteProc.busy) return
     pasteProc.busy = true
+    pasteProc.started = false
     pasteProc.running = true
   }
 
   Process {
     id: pasteProc
     property bool busy: false
+    property bool started: false
+    onStarted: started = true
+    onRunningChanged: if (!running && root.procFailedToStart(pasteProc)) pasteProc.busy = false
     command: ["wl-paste", "--no-newline", "--type", "text"]
     stdout: StdioCollector {
       id: outPaste
@@ -1365,6 +1403,19 @@ Item {
     }
   }
 
+  // Stops an agent that has gone quiet, which would otherwise stay "thinking"
+  // until the user presses Esc.
+  Timer {
+    id: aiIdleWatchdog
+    interval: 1000
+    repeat: true
+    running: !!(root.aiSession && (root.aiSession.state === "starting" || root.aiSession.state === "running"))
+    onTriggered: {
+      var snap = AiBackend.checkIdle(Date.now())
+      if (snap) root.aiShowSnapshot(snap)
+    }
+  }
+
   // Terminal handoff (plan §21). xdg-terminal-exec's own `-- command args...`
   // form spawns the resume command argv-safe end to end — no shell string
   // ever holds the session id. `handled` lets either the exit signal or the
@@ -1404,7 +1455,7 @@ Item {
         // no UI left to show an error in (plan §21 can't be honored
         // post-hoc). Surface it loudly instead of losing it silently.
         Quickshell.execDetached(["notify-send", "Omarchy Find",
-          "Terminal failed to open — resume manually: " + aiHandoffProcess.resumeArgv.join(" ")])
+          "Terminal failed to open — resume manually: " + AiBackend.notificationText(aiHandoffProcess.resumeArgv.join(" "))])
       }
     }
   }
@@ -1441,15 +1492,10 @@ Item {
 
   // UI
 
-  PanelWindow {
+  OverlayWindow {
     id: panel
-    visible: root.opened
-    anchors { top: true; bottom: true; left: true; right: true }
-    color: "transparent"
+    shown: root.opened
     WlrLayershell.namespace: "omarchy-find"
-    WlrLayershell.layer: WlrLayer.Overlay
-    WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
-    exclusionMode: ExclusionMode.Ignore
 
     Rectangle {
       anchors.fill: parent
@@ -1485,7 +1531,7 @@ Item {
       // animates height changes of its own (expanding, the AI answer box).
       Behavior on height {
         enabled: !searchFieldGrow.running
-        NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
+        NumberAnimation { duration: Style.duration(root.expanded ? 180 : 120); easing.type: Easing.OutCubic }
       }
 
       color: root.background
@@ -1521,30 +1567,12 @@ Item {
             root.pasteClipboard()
             event.accepted = true
           } else if (event.key === Qt.Key_Backtab || (event.key === Qt.Key_Tab && (event.modifiers & Qt.ShiftModifier))) {
-            if (root.switchPanel(-1)) {
-              event.accepted = true
-            } else if (root.expanded && !root.isAiMode) {
-              root.cycleFilter(-1)
-              event.accepted = true
-            } else {
-              event.accepted = true
-            }
+            if (root.expanded) root.cycleFilter(-1)
+            event.accepted = true
           } else if (event.key === Qt.Key_Tab) {
-            if (root.isGoogleSearch || root.isAiMode) {
-              event.accepted = true
-            } else if (root.expanded && root.filterText.trim() !== "") {
-              root.cycleFilter(1)
-              event.accepted = true
-            } else if (!root.switchPanel(1)) {
-              if (root.expanded) {
-                root.cycleFilter(1)
-              } else {
-                root.expandForBrowse()
-              }
-              event.accepted = true
-            } else {
-              event.accepted = true
-            }
+            if (root.expanded) root.cycleFilter(1)
+            else root.expandForBrowse()
+            event.accepted = true
           } else if (Util.editsFilter(event, root.filterText)) {
             root.setFilter(Util.editedFilter(event, root.filterText))
             event.accepted = true
@@ -1674,7 +1702,7 @@ Item {
           color: "transparent"
 
           Behavior on height {
-            NumberAnimation { id: searchFieldGrow; duration: 180; easing.type: Easing.OutCubic }
+            NumberAnimation { id: searchFieldGrow; duration: Style.duration(180); easing.type: Easing.OutCubic }
           }
 
           Text {
@@ -1958,22 +1986,9 @@ Item {
               Text {
                 id: aiAnswerText
                 width: aiAnswerFlick.width
-                text: {
-                  var s = root.aiSession
-                  if (!s) return ""
-                  if (s.state !== "error") return s.displayedText
-                  // A mid-stream failure must not hide whatever the agent
-                  // already said (setError() flushes pendingText into
-                  // displayedText for exactly this) — show the retained
-                  // partial answer with a clearly separated error line
-                  // beneath it, not the error message alone.
-                  var msg = s.errorMessage || ""
-                  return s.displayedText && s.displayedText.length > 0
-                    ? s.displayedText + "\n\n⚠ " + msg
-                    : msg
-                }
+                text: AiBackend.answerMarkdown(root.aiSession)
                 textFormat: Text.MarkdownText
-                onLinkActivated: function(link) { Qt.openUrlExternally(link) }
+                onLinkActivated: function(link) { root.aiOpenLink(link) }
                 wrapMode: Text.Wrap
                 // Only redden the whole block when there's nothing but the
                 // error to show — a retained partial answer should read as

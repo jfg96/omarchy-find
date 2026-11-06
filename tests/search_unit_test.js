@@ -56,6 +56,12 @@ assert(backend.buildIndexRequest("", 0, 1).kinds.join() === "d,f", "empty query 
 assert(backend.parseSearchConfig(null).engine === backend.DEFAULT_ENGINE, "missing search.json uses the default engine")
 assert(backend.parseSearchConfig('{"engine":"fd"}').engine === "fd", "search.json can select fd")
 assert(backend.parseSearchConfig('{"engine":"turbo"}').engine === backend.DEFAULT_ENGINE, "unknown engines are ignored")
+const lastGood = { engine: "fd", excludes: ["/android"] }
+for (const broken of ["{nope", "[]", "7", "null"]) {
+  assert(backend.parseSearchConfig(broken, lastGood) === lastGood, "a search.json that does not parse keeps the last valid settings: " + broken)
+}
+assert(backend.parseSearchConfig(null, lastGood).engine === backend.DEFAULT_ENGINE, "a deleted search.json goes back to the defaults")
+assert(backend.buildArgv("-foo", 0, false, "/home/test", helperPath).includes("--query=-foo"), "a query starting with a dash stays one argument")
 assert(backend.parseSearchConfig("{nope").engine === backend.DEFAULT_ENGINE, "invalid JSON is ignored")
 
 // User excludes from search.json reach fd, the helper and lince.

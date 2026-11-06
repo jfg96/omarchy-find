@@ -65,6 +65,13 @@ var Activity = {
   Searching: "searching"
 }
 
+// Agent output is not ours: an answer past MAX_ANSWER_CHARS stops the run,
+// and stderr keeps only its tail, which is where a failure's reason is.
+var MAX_ANSWER_CHARS = 100000
+var MAX_STDERR_CHARS = 65536
+
+var ZERO_WIDTH_SPACE = "\u200B"
+
 var currentGeneration = 0
 var runtimeConfig = AiConfig.defaults()
 var session = null       // active AiSession, or null when idle
@@ -120,7 +127,7 @@ function agentDisplay() {
 // is already wrapped for process-group isolation (see wrapForGroup) and
 // ready to assign directly to Process.command — or argv: null if the
 // configured agent isn't a known adapter (unsupported-agent config error).
-function beginGeneration(promptText) {
+function beginGeneration(promptText, now) {
   session = null
   parserState = null
 
@@ -137,18 +144,8 @@ function beginGeneration(promptText) {
   var frozenConfig = runtimeConfig
 
   if (!adapter) {
-    // Give a targeted hint for agents the user has set via Omarchy's own
-    // default-agent system but that don't yet have a headless adapter here.
-    // This is far better UX than a generic "unsupported agent" error that
-    // implies the user made a mistake in ai.json.
-    var knownOmarchyAgents = ["gemini", "copilot", "grok", "omp", "crush"]
-    var isKnownOmarchy = knownOmarchyAgents.indexOf(runtimeConfig.agent) !== -1
-    var errorMsg = isKnownOmarchy
-      ? runtimeConfig.agent + " does not yet support headless AI mode. " +
-        "Switch your Omarchy agent to claude, codex, agy, opencode, or pi " +
-        "(or create ~/.config/omarchy-find/ai.json with one of those agents)."
-      : "Unsupported agent \"" + runtimeConfig.agent + "\" — check ai.json. " +
-        "Supported agents: claude, codex, agy, opencode, pi."
+    // The only way here is an Omarchy default agent with no adapter yet.
+    var errorMsg = unsupportedAgentMessage(runtimeConfig.agent)
     session = {
       generation: gen,
       adapterId: runtimeConfig.agent,
@@ -164,7 +161,8 @@ function beginGeneration(promptText) {
       continuity: "none",
       stderrText: "",
       prompt: promptText,
-      config: frozenConfig
+      config: frozenConfig,
+      lastOutputAt: clockOf(now)
     }
     return { generation: gen, argv: null }
   }
@@ -190,12 +188,22 @@ function beginGeneration(promptText) {
     // Typewriter ramp state (see tick()): active reveal time accumulated so
     // far, and the fractional-character carry between ticks.
     revealElapsedMs: 0,
-    revealCarry: 0
+    revealCarry: 0,
+    lastOutputAt: clockOf(now)
   }
   parserState = {}
 
   var argv = adapter.buildRun(promptText, sessionRef, runtimeConfig)
   return { generation: gen, argv: wrapForGroup(argv) }
+}
+
+function clockOf(now) {
+  return now === undefined ? Date.now() : now
+}
+
+function unsupportedAgentMessage(agent) {
+  return agent + " does not support AI search yet. Nothing was sent. Switch your Omarchy agent, or set " +
+    "\"agent\" in ~/.config/omarchy-find/ai.json, to one of: " + AiConfig.SUPPORTED_AGENTS.join(", ") + "."
 }
 
 function isStale(gen) {
@@ -233,8 +241,12 @@ function pickFreeSlot(slotABusy, slotBBusy) {
 
 // ------------------------------------------------------------- events -----
 
-function handleLine(gen, line) {
+function handleLine(gen, line, now) {
   if (isStale(gen)) return null
+  // A run that already failed adds nothing: this is also what holds the limit
+  // while a stopped process flushes its last output.
+  if (session.state === State.Error) return null
+  session.lastOutputAt = clockOf(now)
   var adapter = AiAdapters.get(session.adapterId)
   if (!adapter) return snapshot()
   var events
@@ -277,8 +289,13 @@ function appendText(delta) {
   // feedback: even an 80-char "first sentence" flash reads as a burst, and
   // the CLIs' first delta is often a whole sentence). TTFC is still ~one
   // display tick (16ms) since the drain timer runs the whole time.
-  session.rawText += delta
-  session.pendingText += delta
+  var room = MAX_ANSWER_CHARS - session.rawText.length
+  var kept = delta.length > room ? delta.slice(0, room) : delta
+  session.rawText += kept
+  session.pendingText += kept
+  if (kept.length < delta.length) {
+    setError("Answer stopped at " + MAX_ANSWER_CHARS + " characters", "limit")
+  }
 }
 
 function setError(message, kind) {
@@ -305,7 +322,19 @@ function setError(message, kind) {
 
 function handleStderrChunk(gen, chunk) {
   if (isStale(gen)) return
-  session.stderrText += String(chunk || "")
+  session.lastOutputAt = Date.now()
+  session.stderrText = (session.stderrText + String(chunk || "")).slice(-MAX_STDERR_CHARS)
+}
+
+// Called on a timer with the current time. A run with no output for its
+// configured idleTimeoutSec ends in an error whose snapshot asks the caller to
+// stop the process. Returns null while there is nothing to do.
+function checkIdle(now) {
+  if (!session || (session.state !== State.Starting && session.state !== State.Running)) return null
+  var limitSec = session.config.idleTimeoutSec
+  if (now - session.lastOutputAt < limitSec * 1000) return null
+  setError(session.agentLabel + " stopped: no output for " + limitSec + " seconds", "timeout")
+  return snapshot()
 }
 
 // exitCode: the OS exit code of the (setsid-wrapped) agent process.
@@ -322,6 +351,7 @@ function handleExit(gen, exitCode) {
   if (session.rawText.length === 0 && parserState &&
       typeof parserState.finalText === "string" && parserState.finalText.length > 0) {
     appendText(parserState.finalText)
+    if (session.state === State.Error) return snapshot()
   }
 
   var producedNothing = session.rawText.length === 0 && session.pendingText.length === 0
@@ -429,9 +459,10 @@ function snapshot() {
       rawText: "", displayedText: "", pendingText: "",
       prompt: "",
       canHandoff: false,
-      errorMessage: disp.supported ? null : ("Unsupported agent \"" + disp.agentId + "\" in ai.json"),
+      errorMessage: disp.supported ? null : unsupportedAgentMessage(disp.agentId),
       errorKind: disp.supported ? null : "config",
-      continuity: "none"
+      continuity: "none",
+      shouldStop: false
     }
   }
   return {
@@ -453,8 +484,48 @@ function snapshot() {
     canHandoff: session.canHandoff,
     errorMessage: session.errorMessage,
     errorKind: session.errorKind,
-    continuity: session.continuity
+    continuity: session.continuity,
+    // The process may still be running: the caller has to stop it.
+    shouldStop: session.state === State.Error &&
+      (session.errorKind === "limit" || session.errorKind === "timeout")
   }
+}
+
+// Agent output is untrusted: a file or a web page the agent read can steer
+// what it writes, and Text.MarkdownText fetches an image as soon as it renders
+// it. An invisible character after "!" or "<" keeps that text from parsing as
+// an image or a tag, wherever it stands, and leaves code samples reading the
+// same. rawText, which Ctrl+C copies, is never filtered.
+function safeMarkdown(text) {
+  return String(text === null || text === undefined ? "" : text)
+    .replace(/!\[/g, "!" + ZERO_WIDTH_SPACE + "[")
+    .replace(/<(?=[a-zA-Z\/!?])/g, "<" + ZERO_WIDTH_SPACE)
+}
+
+// What the answer panel shows for a snapshot. A mid-stream failure must not
+// hide what the agent already said (setError() flushes pendingText into
+// displayedText for this), so it keeps the partial answer with a separate
+// error line beneath it.
+function answerMarkdown(snap) {
+  if (!snap) return ""
+  if (snap.state !== State.Error) return safeMarkdown(snap.displayedText)
+  var message = snap.errorMessage || ""
+  return safeMarkdown(snap.displayedText ? snap.displayedText + "\n\n\u26a0 " + message : message)
+}
+
+// Notification bodies are markup, and a resume command carries a session id
+// the agent reported.
+function notificationText(text) {
+  return String(text === null || text === undefined ? "" : text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+}
+
+// A link in an answer opens only over https: any other scheme goes to whatever
+// handles it on this machine, which is not for agent output to pick.
+function isOpenableLink(link) {
+  return typeof link === "string" && /^https:\/\/[^\s]+$/i.test(link)
 }
 
 // -------------------------------------------------------------- handoff ---

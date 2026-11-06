@@ -10,7 +10,10 @@ BarWidget {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  readonly property bool opened: root.bar && root.bar.shell && typeof root.bar.shell.isPluginOpen === "function"
+  // Not `opened`: the bar takes a widget with open(), close() and opened for a
+  // panel of its own and tabs into it, leaving the panel it came from open
+  // under the overlay.
+  readonly property bool overlayOpen: root.bar && root.bar.shell && typeof root.bar.shell.isPluginOpen === "function"
     ? root.bar.shell.isPluginOpen(root.moduleName)
     : false
 
@@ -58,7 +61,7 @@ BarWidget {
     bar: root.bar
     text: "󰍉"
     tooltipText: "Search files"
-    active: root.opened
+    active: root.overlayOpen
     onPressed: function(b) {
       if (b === Qt.LeftButton) root.toggle()
     }

@@ -284,7 +284,8 @@ function buildArgv(query, filterIndex, forDirs, home, helperPath, userExcludes) 
     var helperArgv = [
       String(helperPath || ""),
       "--home", home,
-      "--query", cleanQuery,
+      // One argument, so a query starting with "-" does not read as an option.
+      "--query=" + cleanQuery,
       "--kind", forDirs ? "d" : "f",
       "--max-results", String(MAX_RESULTS)
     ]
@@ -367,15 +368,21 @@ function parseUserExcludes(value) {
 }
 
 // ~/.config/omarchy-find/search.json, e.g. {"engine": "fd", "exclude":
-// ["/android"]}. Anything missing or invalid means the default.
-function parseSearchConfig(text) {
+// ["/android"]}. A missing file or field means the default. A file that does
+// not parse, as during an edit, keeps `current`: falling back to the defaults
+// would restart lince without the user's excludes.
+function parseSearchConfig(text, current) {
   var config = { engine: DEFAULT_ENGINE, excludes: [] }
   if (!text) return config
+  var parsed
   try {
-    var parsed = JSON.parse(text)
-    if (parsed && (parsed.engine === "index" || parsed.engine === "fd")) config.engine = parsed.engine
-    if (parsed) config.excludes = parseUserExcludes(parsed.exclude)
-  } catch (e) { /* defaults */ }
+    parsed = JSON.parse(text)
+  } catch (e) {
+    return current || config
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return current || config
+  if (parsed.engine === "index" || parsed.engine === "fd") config.engine = parsed.engine
+  config.excludes = parseUserExcludes(parsed.exclude)
   return config
 }
 
@@ -500,9 +507,13 @@ function isTypedText(text, modifiers, ignoredModifiers) {
   return (modifiers & ~ignoredModifiers) === 0
 }
 
-// Clipboard text appended to the query: one line, without control characters.
+// Clipboard text appended to the query: one line, without control characters,
+// and short enough to stay within what a single process argument can hold.
+var MAX_PASTE_CHARS = 4096
+
 function pastedText(text) {
   return String(text || "")
+    .slice(0, MAX_PASTE_CHARS)
     .replace(/[\r\n\t]+/g, " ")
     .replace(/[\u0000-\u001f\u007f]/g, "")
 }
