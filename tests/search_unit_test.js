@@ -58,6 +58,29 @@ assert(backend.parseSearchConfig('{"engine":"fd"}').engine === "fd", "search.jso
 assert(backend.parseSearchConfig('{"engine":"turbo"}').engine === backend.DEFAULT_ENGINE, "unknown engines are ignored")
 assert(backend.parseSearchConfig("{nope").engine === backend.DEFAULT_ENGINE, "invalid JSON is ignored")
 
+// User excludes from search.json reach fd, the helper and lince.
+assert(backend.parseSearchConfig(null).excludes.length === 0, "missing search.json excludes nothing extra")
+assert(backend.parseSearchConfig('{"exclude":"/android"}').excludes.length === 0, "a non-list exclude is ignored")
+const userExcludes = backend.parseSearchConfig(JSON.stringify({
+  exclude: ["/android", " /android ", "", 7, null, "--hidden", "bad\npattern", "x".repeat(257), "build/"]
+})).excludes
+assert(userExcludes.join() === "/android,build/", "exclude keeps clean patterns once and drops the rest")
+assert(backend.parseSearchConfig(JSON.stringify({ exclude: Array.from({ length: 100 }, (_, i) => "p" + i) })).excludes.length === 64,
+  "exclude is bounded")
+const excludedFrom = argv => argv.filter((value, index) => ["--exclude", "-E"].includes(argv[index - 1]))
+const browseArgv = backend.buildArgv("", 0, false, "/home/test", helperPath, userExcludes)
+const helperArgv = backend.buildArgv("notes", 0, false, "/home/test", helperPath, userExcludes)
+const daemonArgv = backend.buildIndexDaemonArgv("/p/lince", "/run/s", "/home/test", userExcludes)
+const indexRequest = backend.buildIndexRequest("notes", 0, 1, "/home/test", userExcludes)
+for (const excludes of [excludedFrom(browseArgv), excludedFrom(helperArgv), excludedFrom(daemonArgv), Array.from(indexRequest.exclude)]) {
+  assert(excludes.includes("/android") && excludes.includes("build/") && excludes.includes(".git"),
+    "every engine gets the fixed and the user excludes")
+}
+assert(!excludedFrom(backend.buildArgv("", 0, false, "/home/test", helperPath)).includes("/android"), "excludes do not leak between calls")
+assert(backend.EXCLUDES.indexOf("/android") === -1, "user excludes never join the shared list")
+assert(backend.userExcludesChanged(["a"], ["a"]) === false && backend.userExcludesChanged(["a"], []) === true,
+  "only a real change counts")
+
 const daemon = backend.buildIndexDaemonArgv("/p/bin/lince-launcher", "/run/s.sock", "/home/test")
 assert(daemon[0] === "/p/bin/lince-launcher" && daemon[1] === "serve", "lince starts through the verifying launcher")
 assert(daemon.includes("--exit-with-parent") && daemon[daemon.indexOf("--root") + 1] === "/home/test", "daemon indexes the home and dies with the shell")

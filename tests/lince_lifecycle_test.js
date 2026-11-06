@@ -52,7 +52,7 @@ function makeShell(env) {
     " searchConfigChanges: typeof searchConfigChanges === 'function' ? searchConfigChanges : undefined," +
     " indexRelaunchOnDisconnect: typeof indexRelaunchOnDisconnect === 'function' ? indexRelaunchOnDisconnect : undefined," +
     " indexPrivateSocketPath: indexPrivateSocketPath, INDEX_STATUS_REQUEST: INDEX_STATUS_REQUEST, indexServesHome: indexServesHome," +
-    " logTail: logTail } })()", ctx)
+    " logTail: logTail, userExcludesChanged: userExcludesChanged } })()", ctx)
   vm.runInContext(`
     var indexDaemon = {
       _running: false, command: [],
@@ -68,6 +68,7 @@ function makeShell(env) {
       home: "/home/test",
       indexBinaryPath: "/p/bin/lince-launcher",
       searchEngine: Backend.DEFAULT_ENGINE,
+      searchExcludes: [],
       searchConfigApplied: false,
       indexMissing: false,
       indexRestartDelay: 2000,
@@ -87,6 +88,24 @@ function makeShell(env) {
     root.indexPrivateSocketPath = ` + property("indexPrivateSocketPath") + `
   `, ctx)
   return ctx
+}
+
+// A new exclude must stop lince indexing that path: the running daemon keeps
+// its start-up excludes, so it has to go, once, and return with the new ones.
+{
+  const shell = makeShell({ XDG_RUNTIME_DIR: "/run/user/1000" })
+  shell.root.applySearchConfig('{"exclude":["/android"]}')
+  assert(shell.launches === 1, "the first load starts lince")
+  assert(shell.indexDaemon.command.includes("/android"), "the first load already skips the user's excludes")
+  shell.root.applySearchConfig('{"exclude":["/android"]}')
+  assert(shell.indexDaemon.running, "a reload with the same excludes leaves lince running")
+  shell.root.applySearchConfig('{"exclude":["/android","/vm"]}')
+  assert(!shell.indexDaemon.running, "changed excludes stop the running daemon")
+  shell.root.daemonExited(1)
+  assert(shell.indexRestart.running, "its exit schedules the relaunch through the backoff")
+  shell.indexRestart.running = false
+  shell.root.ensureIndexDaemon()
+  assert(shell.launches === 2 && shell.indexDaemon.command.includes("/vm"), "lince returns with the new excludes")
 }
 
 // The config watchdog reloads search.json every five seconds. While a lince

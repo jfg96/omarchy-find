@@ -34,6 +34,7 @@ Item {
   // daemon started here lives as long as the shell; searches fall back to fd
   // until it answers.
   property string searchEngine: Backend.DEFAULT_ENGINE
+  property var searchExcludes: []
   readonly property string indexBinaryPath: decodeURIComponent(
     String(Qt.resolvedUrl("bin/lince-launcher")).replace(/^file:\/\//, ""))
   // Empty without XDG_RUNTIME_DIR: the index then stays off. lince's default
@@ -422,7 +423,7 @@ Item {
       // One request covers directories and files; the answer carries the
       // mtimes the stat pass would otherwise fetch.
       root.indexPendingGen = root.searchGen
-      indexSocket.write(JSON.stringify(Backend.buildIndexRequest(root.filterText, root.activeFilter, root.searchGen, root.home)) + "\n")
+      indexSocket.write(JSON.stringify(Backend.buildIndexRequest(root.filterText, root.activeFilter, root.searchGen, root.home, root.searchExcludes)) + "\n")
       indexSocket.flush()
       indexTimeout.restart()
       return
@@ -434,7 +435,7 @@ Item {
       pending++
       procDirs.gen = root.searchGen
       procDirs.cancelled = false
-      procDirs.command = Backend.buildArgv(root.filterText, root.activeFilter, true, root.home, root.searchHelperPath)
+      procDirs.command = Backend.buildArgv(root.filterText, root.activeFilter, true, root.home, root.searchHelperPath, root.searchExcludes)
       procDirs.busy = true
       procDirs.running = true
     }
@@ -442,7 +443,7 @@ Item {
       pending++
       procFiles.gen = root.searchGen
       procFiles.cancelled = false
-      procFiles.command = Backend.buildArgv(root.filterText, root.activeFilter, false, root.home, root.searchHelperPath)
+      procFiles.command = Backend.buildArgv(root.filterText, root.activeFilter, false, root.home, root.searchHelperPath, root.searchExcludes)
       procFiles.busy = true
       procFiles.running = true
     }
@@ -519,7 +520,7 @@ Item {
       return
     }
     if (!indexDaemon.running && !root.indexMissing && root.indexSocketPath !== "") {
-      indexDaemon.command = Backend.buildIndexDaemonArgv(root.indexBinaryPath, root.indexSocketPath, root.home)
+      indexDaemon.command = Backend.buildIndexDaemonArgv(root.indexBinaryPath, root.indexSocketPath, root.home, root.searchExcludes)
       indexDaemon.running = true
     }
   }
@@ -1031,10 +1032,17 @@ Item {
   Component.onCompleted: searchConfigFile.reload()
 
   function applySearchConfig(text) {
-    var engine = Backend.parseSearchConfig(text).engine
+    var config = Backend.parseSearchConfig(text)
+    var engine = config.engine
+    var excludesChanged = Backend.userExcludesChanged(root.searchExcludes, config.excludes)
+    if (excludesChanged) root.searchExcludes = config.excludes
     // Relaunches after a crash or a failed download go through indexRestart,
     // with its backoff, never through this periodic reload.
-    if (!Backend.searchConfigChanges(root.searchConfigApplied, root.searchEngine, engine)) return
+    if (!Backend.searchConfigChanges(root.searchConfigApplied, root.searchEngine, engine)) {
+      // Its exit relaunches it, through indexRestart, with the new excludes.
+      if (excludesChanged && indexDaemon.running) indexDaemon.running = false
+      return
+    }
     root.searchConfigApplied = true
     root.searchEngine = engine
     root.indexMissing = false
