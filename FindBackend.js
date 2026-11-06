@@ -41,6 +41,14 @@ var EXCLUDES = [
   "venv"
 ]
 
+var MAX_USER_EXCLUDES = 64
+var MAX_USER_EXCLUDE_LENGTH = 256
+
+// The fixed excludes followed by the user's from search.json.
+function allExcludes(userExcludes) {
+  return EXCLUDES.concat(userExcludes || [])
+}
+
 var SYSTEM_EXCLUDES = [
   "*Cache*",
   "Local Storage",
@@ -268,7 +276,7 @@ function extractTerms(query) {
 // runs concurrent, accent-insensitive fd passes (filename, path, fuzzy) and
 // merges them in relevance order. Empty queries list files with fd directly.
 // Neither ever follows symlinks.
-function buildArgv(query, filterIndex, forDirs, home, helperPath) {
+function buildArgv(query, filterIndex, forDirs, home, helperPath, userExcludes) {
   var filter = FILTERS[filterIndex] || FILTERS[0]
   var cleanQuery = String(query || "").trim()
 
@@ -285,8 +293,9 @@ function buildArgv(query, filterIndex, forDirs, home, helperPath) {
     if (filter.systemFolders) helperArgv.push("--system-folders")
     if (!forDirs && filter.exts.length > 0)
       helperArgv.push("--extensions", filter.exts.join(","))
-    for (var x = 0; x < EXCLUDES.length; x++)
-      helperArgv.push("--exclude", EXCLUDES[x])
+    var helperExcludes = allExcludes(userExcludes)
+    for (var x = 0; x < helperExcludes.length; x++)
+      helperArgv.push("--exclude", helperExcludes[x])
     if (filter.systemFolders) {
       for (var sx = 0; sx < SYSTEM_EXCLUDES.length; sx++)
         helperArgv.push("--exclude", SYSTEM_EXCLUDES[sx])
@@ -301,7 +310,8 @@ function buildArgv(query, filterIndex, forDirs, home, helperPath) {
     argv.push("--hidden")
   }
 
-  for (var i = 0; i < EXCLUDES.length; i++) argv.push("-E", EXCLUDES[i])
+  var excludes = allExcludes(userExcludes)
+  for (var i = 0; i < excludes.length; i++) argv.push("-E", excludes[i])
 
   if (filter.systemFolders) {
     argv.push("--max-depth", "3")
@@ -340,14 +350,31 @@ function debounceMs(indexActive, query) {
   return String(query || "").trim().length < 3 ? INDEX_SHORT_DEBOUNCE_MS : INDEX_DEBOUNCE_MS
 }
 
-// ~/.config/omarchy-find/search.json, e.g. {"engine": "fd"}. Anything
-// missing or invalid means the default engine.
+// Patterns from search.json go on the fd and lince command lines, so one that
+// starts with "-" would read as an option. Invalid entries are dropped.
+function parseUserExcludes(value) {
+  if (!Array.isArray(value)) return []
+  var excludes = []
+  for (var i = 0; i < value.length && excludes.length < MAX_USER_EXCLUDES; i++) {
+    var pattern = value[i]
+    if (typeof pattern !== "string") continue
+    pattern = pattern.trim()
+    if (pattern === "" || pattern.length > MAX_USER_EXCLUDE_LENGTH) continue
+    if (pattern.charAt(0) === "-" || /[\u0000-\u001f\u007f]/.test(pattern)) continue
+    if (excludes.indexOf(pattern) === -1) excludes.push(pattern)
+  }
+  return excludes
+}
+
+// ~/.config/omarchy-find/search.json, e.g. {"engine": "fd", "exclude":
+// ["/android"]}. Anything missing or invalid means the default.
 function parseSearchConfig(text) {
-  var config = { engine: DEFAULT_ENGINE }
+  var config = { engine: DEFAULT_ENGINE, excludes: [] }
   if (!text) return config
   try {
     var parsed = JSON.parse(text)
     if (parsed && (parsed.engine === "index" || parsed.engine === "fd")) config.engine = parsed.engine
+    if (parsed) config.excludes = parseUserExcludes(parsed.exclude)
   } catch (e) { /* defaults */ }
   return config
 }
@@ -397,6 +424,12 @@ function searchConfigChanges(applied, currentEngine, nextEngine) {
   return !applied || currentEngine !== nextEngine
 }
 
+// Requests pick up new excludes at once, but a running daemon keeps the ones
+// it was started with, and keeps indexing what they should now skip.
+function userExcludesChanged(current, next) {
+  return JSON.stringify(current || []) !== JSON.stringify(next || [])
+}
+
 // Whether a dropped connection must schedule a lince relaunch. A lince that
 // exited at once because another daemon held the socket (a systemd user
 // service, or the previous shell's daemon during a reload) leaves nothing
@@ -417,20 +450,21 @@ function logTail(lines, line, max) {
 // the socket (lince exits at once then, e.g. when it runs as a systemd user
 // service). The base excludes are fixed at index time; category excludes
 // (System Folders) are applied per request.
-function buildIndexDaemonArgv(launcher, socketPath, home) {
+function buildIndexDaemonArgv(launcher, socketPath, home, userExcludes) {
   var argv = [launcher, "serve", "--socket", socketPath, "--root", home, "--exit-with-parent"]
-  for (var i = 0; i < EXCLUDES.length; i++) argv.push("--exclude", EXCLUDES[i])
+  var excludes = allExcludes(userExcludes)
+  for (var i = 0; i < excludes.length; i++) argv.push("--exclude", excludes[i])
   return argv
 }
 
 // lince request: the same filters buildArgv hands to fd, for directories
 // and files at once. An empty query browses.
-function buildIndexRequest(query, filterIndex, id, home) {
+function buildIndexRequest(query, filterIndex, id, home, userExcludes) {
   var filter = FILTERS[filterIndex] || FILTERS[0]
   var kinds = []
   if (filter.dirs) kinds.push("d")
   if (filter.files) kinds.push("f")
-  var exclude = EXCLUDES.slice()
+  var exclude = allExcludes(userExcludes)
   if (filter.systemFolders) exclude = exclude.concat(SYSTEM_EXCLUDES)
   return {
     id: id || 0,

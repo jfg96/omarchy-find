@@ -131,6 +131,12 @@ Until lince is ready, or whenever it is unavailable (no network on first start, 
 { "engine": "fd" }
 ```
 
+To keep folders out of every search, add patterns to `exclude` in the same file. They use fd's exclude syntax, and a leading `/` anchors a pattern to your home folder. Changes apply on their own; Omarchy Find restarts its own lince so that the folder also leaves the index. A lince run as a separate service keeps indexing it, but the results still skip it.
+
+```json
+{ "exclude": ["/android", "build"] }
+```
+
 > **Tip (Optional):** To assign the global keyboard shortcut (`Alt + Space`) and enable the `omarchy-find` command in your terminal, run:
 > ```sh
 > ~/.config/omarchy/plugins/oma.find/bin/omarchy-find setup-keybind
