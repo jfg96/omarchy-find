@@ -34,43 +34,59 @@ strip_bindings() {
 # Writes through a symlink to its target, keeps a backup of the file as it was
 # before the first change, and replaces it in one rename. Returns 1 when the
 # file would come out the same, and then writes nothing.
+# Callers test the status, which turns set -e off in here, so every step
+# reports its own failure.
 write_bindings() {
-  local block="$1" target tmp kept status=0
-  target=$(realpath -- "$BINDINGS_FILE")
-  tmp=$(mktemp "$target.XXXXXX")
+  local block="$1" target tmp="" kept content status=0
+  target=$(realpath -- "$BINDINGS_FILE") || bindings_write_failed
+  tmp=$(mktemp "$target.XXXXXX") || bindings_write_failed
   strip_bindings "$target" > "$tmp" || status=$?
-  if (( status != 0 )); then
+  if (( status == 3 )); then
     rm -f -- "$tmp"
     echo "omarchy-find: $BINDINGS_FILE has '$KEYBIND_BEGIN' without '$KEYBIND_END'; fix it by hand." >&2
     exit 1
   fi
+  (( status == 0 )) || bindings_write_failed
   if [ -z "$block" ] && cmp -s -- "$tmp" "$target"; then
     rm -f -- "$tmp"
     return 1
   fi
   # $(...) drops trailing newlines, so the blank lines left where the shortcut
   # was do not pile up at the end of the file.
-  kept=$(cat -- "$tmp")
-  {
-    [ -z "$kept" ] || printf '%s\n' "$kept"
-    if [ -n "$block" ]; then
-      [ -z "$kept" ] || printf '\n'
-      printf '%s\n' "$block"
-    fi
-  } > "$tmp"
+  kept=$(cat -- "$tmp") || bindings_write_failed
+  content=$kept
+  if [ -n "$kept" ] && [ -n "$block" ]; then
+    content+=$'\n\n'
+  fi
+  content+=$block
+  if [ -n "$content" ]; then
+    printf '%s\n' "$content" > "$tmp" || bindings_write_failed
+  else
+    : > "$tmp" || bindings_write_failed
+  fi
   if cmp -s -- "$tmp" "$target"; then
     rm -f -- "$tmp"
     return 1
   fi
-  [ -e "$target.omarchy-find.bak" ] || cp -p -- "$target" "$target.omarchy-find.bak"
-  chmod --reference="$target" -- "$tmp"
-  mv -- "$tmp" "$target"
+  [ -e "$target.omarchy-find.bak" ] || cp -p -- "$target" "$target.omarchy-find.bak" || bindings_write_failed
+  chmod --reference="$target" -- "$tmp" || bindings_write_failed
+  mv -- "$tmp" "$target" || bindings_write_failed
+}
+
+# Uses write_bindings' tmp, which is still in scope when it fails.
+bindings_write_failed() {
+  rm -f -- "${tmp:-}"
+  echo "omarchy-find: could not update $BINDINGS_FILE; it was left as it was." >&2
+  exit 1
 }
 
 reload_hyprland() {
   if command -v hyprctl >/dev/null 2>&1; then
-    hyprctl reload >/dev/null 2>&1 || true
-    echo "✓ Hyprland configuration reloaded."
+    if hyprctl reload >/dev/null 2>&1; then
+      echo "✓ Hyprland configuration reloaded."
+    else
+      echo "omarchy-find: could not reload Hyprland; run 'hyprctl reload'." >&2
+    fi
   fi
 }
 

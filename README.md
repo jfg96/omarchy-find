@@ -150,6 +150,8 @@ To keep folders out of every search, add patterns to `exclude` in the same file.
 { "exclude": ["/android", "build"] }
 ```
 
+A `search.json` that doesn't parse is ignored and the last valid settings stay in place.
+
 > **Tip (Optional):** To assign the global keyboard shortcut (`Alt + Space`) and enable the `omarchy-find` command in your terminal, run:
 > ```sh
 > ~/.config/omarchy/plugins/oma.find/bin/omarchy-find setup-keybind

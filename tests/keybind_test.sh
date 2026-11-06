@@ -111,6 +111,26 @@ cp "$bindings" "$sandbox/original"
 check fails run setup-keybind 'ALT + SPACE", "x", "rm -rf ~'
 check cmp -s "$sandbox/original" "$bindings"
 
+# A step that fails is reported, and the file stays as it was.
+for tool in mv cp; do
+  setup
+  printf '%s\n' "$user_lines" > "$bindings"
+  cp "$bindings" "$sandbox/original"
+  printf '#!/bin/sh\nexit 1\n' > "$sandbox/stubs/$tool"
+  chmod +x "$sandbox/stubs/$tool"
+  check fails run setup-keybind
+  check grep -qF 'could not update' "$sandbox/stderr"
+  check cmp -s "$sandbox/original" "$bindings"
+  check [ -z "$(find "$sandbox/home/.config/hypr" -name 'bindings.lua.??????')" ]
+done
+
+# A failed reload is not reported as done.
+setup
+printf '%s\n' "$user_lines" > "$bindings"
+printf '#!/bin/sh\nexit 1\n' > "$sandbox/stubs/hyprctl"
+check run setup-keybind
+check grep -qF 'could not reload' "$sandbox/stderr"
+
 # The file keeps its permissions.
 setup
 printf '%s\n' "$user_lines" > "$bindings"

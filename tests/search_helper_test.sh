@@ -90,6 +90,10 @@ check contains "$(run_helper --query 'musica tema' --kind f)" "Música/tema.mp3"
 # A term that only occurs in the home path itself must not match everything.
 check test -z "$(run_helper --query "$(basename "$test_root")" --kind f)"
 
+# A query starting with a dash is a query, not an option.
+touch "$home/Documents/-dashed.md"
+check contains "$(run_helper --query=-dashed --kind f)" "-dashed.md"
+
 # A term containing "/" matches against the path below $HOME.
 check contains "$(run_helper --query Documents/fresh-note --kind f)" "fresh-note.md"
 

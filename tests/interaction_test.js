@@ -103,7 +103,7 @@ function makeList() {
   ctx.root.expanded = false
   ctx.debounce.running = true
   ctx.root.requestAction("open")
-  assert(ctx.acted.join() === "open 0" && ctx.root.pendingAction === "", "a collapsed overlay never queues an action for a later list")
+  assert(ctx.acted.length === 0 && ctx.root.pendingAction === "", "a collapsed overlay never queues an action for a later list")
 }
 assert(/root\.flushPendingAction\(\)\s*\n\s*}/.test(block("function presentResults(items, mtimesKnown)") + "\n}"), "showing results runs a pending action")
 for (const fn of ["function setFilter(nextFilter)", "function cancelProcs()", "function setActiveFilter(index)"])
@@ -190,6 +190,66 @@ assert(/"wl-paste", "--no-newline", "--type", "text"/.test(qml), "paste reads te
   fs.rmSync(sandbox, { recursive: true, force: true })
 }
 assert(/Quickshell\.execDetached\(Backend\.terminalArgv\(target\)\)/.test(qml), "Ctrl+T uses terminalArgv")
+
+// A collapsed card shows no rows, so the model's leftovers from an earlier
+// search are out of reach of every action.
+{
+  const ctx = makeList()
+  ctx.root.expanded = false
+  for (const kind of ["open", "folder", "copy", "terminal"]) ctx.root.requestAction(kind)
+  assert(ctx.acted.length === 0, "nothing acts on results the collapsed card does not show")
+}
+
+// Filters do not apply to a Google or AI query, and changing one would clear
+// the Google row Enter is about to open.
+{
+  const changed = []
+  const ctx = {
+    Backend: { FILTERS: [{}, {}] },
+    root: { isGoogleSearch: true, isAiMode: false, activeFilter: 0, setActiveFilter: i => changed.push(i) }
+  }
+  vm.createContext(ctx)
+  vm.runInContext("root.cycleFilter = function(delta) {" + block("function cycleFilter(delta)") + "}", ctx)
+  ctx.root.cycleFilter(-1)
+  assert(changed.length === 0, "Shift+Tab leaves a Google query alone")
+  ctx.root.isGoogleSearch = false
+  ctx.root.cycleFilter(-1)
+  assert(changed.join() === "1", "and cycles filters otherwise")
+}
+
+// A process that never started reports no exit, so every process with a busy
+// flag has to clear it from its running change.
+{
+  const ctx = { root: {} }
+  vm.createContext(ctx)
+  vm.runInContext("root.procFailedToStart = function(proc) {" + block("function procFailedToStart(proc)") + "}", ctx)
+  assert(ctx.root.procFailedToStart({ busy: true, started: false }), "busy without started is a failed start")
+  assert(!ctx.root.procFailedToStart({ busy: false, started: true }), "a normal exit has already cleared busy")
+  assert(!ctx.root.procFailedToStart({ busy: true, started: true }), "a running process is no failure")
+  for (const id of ["procDirs", "procFiles", "procStat", "pasteProc"]) {
+    assert(new RegExp("root\\.procFailedToStart\\(" + id + "\\)").test(qml), id + " recovers from a failed start")
+  }
+  assert(/searchProcExited\(procDirs, "", -1\)/.test(qml) && /searchProcExited\(procFiles, "", -1\)/.test(qml), "a failed search finishes like an empty one")
+  assert(backend.pastedText("x".repeat(200000)).length === backend.MAX_PASTE_CHARS, "a paste stays within what one argument can hold")
+}
+
+// A CLI installed after a failed check is found on the next look.
+{
+  const ctx = {
+    AiBackend: { agentDisplay: () => ({ supported: true, binary: "claude" }) },
+    aiBinaryCheck: { running: false, checkingFor: "claude", command: null },
+    root: { aiBinaryChecked: true, aiBinaryMissing: true, aiBinaryCheckedFor: "claude" }
+  }
+  vm.createContext(ctx)
+  vm.runInContext("root.ensureAiBinaryChecked = function() {" + block("function ensureAiBinaryChecked()") + "}", ctx)
+  ctx.root.ensureAiBinaryChecked()
+  assert(ctx.aiBinaryCheck.running, "a missing binary is looked for again")
+  ctx.aiBinaryCheck.running = false
+  ctx.root.aiBinaryChecked = true
+  ctx.root.aiBinaryMissing = false
+  ctx.root.ensureAiBinaryChecked()
+  assert(!ctx.aiBinaryCheck.running, "a found one is remembered")
+}
 
 // The answer panel renders agent output as Markdown, so it only ever gets the
 // filtered text, and a click only ever opens an https link.

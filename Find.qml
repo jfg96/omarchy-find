@@ -368,6 +368,8 @@ Item {
   }
 
   function cycleFilter(delta) {
+    // Filters do not apply here, and changing one would clear the Google row.
+    if (root.isGoogleSearch || root.isAiMode) return
     var count = Backend.FILTERS.length
     root.setActiveFilter((root.activeFilter + delta + count) % count)
   }
@@ -435,6 +437,7 @@ Item {
       pending++
       procDirs.gen = root.searchGen
       procDirs.cancelled = false
+      procDirs.started = false
       procDirs.command = Backend.buildArgv(root.filterText, root.activeFilter, true, root.home, root.searchHelperPath, root.searchExcludes)
       procDirs.busy = true
       procDirs.running = true
@@ -443,6 +446,7 @@ Item {
       pending++
       procFiles.gen = root.searchGen
       procFiles.cancelled = false
+      procFiles.started = false
       procFiles.command = Backend.buildArgv(root.filterText, root.activeFilter, false, root.home, root.searchHelperPath, root.searchExcludes)
       procFiles.busy = true
       procFiles.running = true
@@ -525,12 +529,21 @@ Item {
     }
   }
 
-  function searchProcExited(proc, text) {
+  // A Process that cannot start never reports `exited`, only `running` going
+  // false without `started`. Left alone, its busy flag would block every later
+  // search. A normal exit has already cleared busy by then.
+  function procFailedToStart(proc) {
+    return proc.busy && !proc.started
+  }
+
+  function searchProcExited(proc, text, exitCode) {
     var wasCancelled = proc.cancelled
     var generation = proc.gen
     proc.busy = false
     proc.cancelled = false
 
+    if (!wasCancelled && exitCode !== 0)
+      console.warn("[omarchy-find] search process failed (exit " + exitCode + ")")
     if (!wasCancelled && generation === root.searchGen && !root.isGoogleSearch) {
       root.procFinished(proc, text)
     }
@@ -584,7 +597,10 @@ Item {
   // While a search is pending the list still shows the previous query's
   // results, so an action asked for then waits for the typed query's own.
   function requestAction(kind) {
-    if (root.expanded && (debounce.running || root.searching)) {
+    // A collapsed card shows no rows: what the model still holds is an earlier
+    // search's, and nothing on screen says which one an action would hit.
+    if (!root.expanded) return
+    if (debounce.running || root.searching) {
       root.pendingAction = kind
       return
     }
@@ -621,6 +637,7 @@ Item {
     if (!hasPaths) return
     procStat.gen = root.searchGen
     procStat.cancelled = false
+    procStat.started = false
     procStat.command = argv
     procStat.busy = true
     procStat.running = true
@@ -795,7 +812,8 @@ Item {
       return
     }
     root.aiBinaryCheckedFor = disp.binary
-    if (root.aiBinaryChecked && aiBinaryCheck.checkingFor === disp.binary) return
+    // Only a found binary is remembered: a missing one may be installed since.
+    if (root.aiBinaryChecked && !root.aiBinaryMissing && aiBinaryCheck.checkingFor === disp.binary) return
     if (aiBinaryCheck.running) return
     root.aiBinaryChecked = false
     aiBinaryCheck.checkingFor = disp.binary
@@ -1054,7 +1072,7 @@ Item {
   Component.onCompleted: searchConfigFile.reload()
 
   function applySearchConfig(text) {
-    var config = Backend.parseSearchConfig(text)
+    var config = Backend.parseSearchConfig(text, { engine: root.searchEngine, excludes: root.searchExcludes })
     var engine = config.engine
     var excludesChanged = Backend.userExcludesChanged(root.searchExcludes, config.excludes)
     if (excludesChanged) root.searchExcludes = config.excludes
@@ -1147,11 +1165,14 @@ Item {
     property string kind: "d"
     property bool busy: false
     property bool cancelled: false
+    property bool started: false
+    onStarted: started = true
+    onRunningChanged: if (!running && root.procFailedToStart(procDirs)) root.searchProcExited(procDirs, "", -1)
     stdout: StdioCollector {
       id: outDirs
       waitForEnd: true
     }
-    onExited: function(exitCode) { root.searchProcExited(procDirs, outDirs.text || "") }
+    onExited: function(exitCode) { root.searchProcExited(procDirs, outDirs.text || "", exitCode) }
   }
 
   Process {
@@ -1160,11 +1181,14 @@ Item {
     property string kind: "f"
     property bool busy: false
     property bool cancelled: false
+    property bool started: false
+    onStarted: started = true
+    onRunningChanged: if (!running && root.procFailedToStart(procFiles)) root.searchProcExited(procFiles, "", -1)
     stdout: StdioCollector {
       id: outFiles
       waitForEnd: true
     }
-    onExited: function(exitCode) { root.searchProcExited(procFiles, outFiles.text || "") }
+    onExited: function(exitCode) { root.searchProcExited(procFiles, outFiles.text || "", exitCode) }
   }
 
   Process {
@@ -1172,6 +1196,9 @@ Item {
     property int gen: 0
     property bool busy: false
     property bool cancelled: false
+    property bool started: false
+    onStarted: started = true
+    onRunningChanged: if (!running && root.procFailedToStart(procStat)) root.statProcExited("")
     stdout: StdioCollector {
       id: outStat
       waitForEnd: true
@@ -1183,12 +1210,16 @@ Item {
   function pasteClipboard() {
     if (pasteProc.busy) return
     pasteProc.busy = true
+    pasteProc.started = false
     pasteProc.running = true
   }
 
   Process {
     id: pasteProc
     property bool busy: false
+    property bool started: false
+    onStarted: started = true
+    onRunningChanged: if (!running && root.procFailedToStart(pasteProc)) pasteProc.busy = false
     command: ["wl-paste", "--no-newline", "--type", "text"]
     stdout: StdioCollector {
       id: outPaste
